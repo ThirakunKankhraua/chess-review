@@ -8,14 +8,20 @@
 // chess.com does not publish its formulas, so numbers here will not match chess.com exactly.
 
 import { explainMove, uciToSan } from './explain.js';
+import { openingTips } from './opening.js';
 
 /** Evaluations beyond +/-10 pawns, and all forced mates, count as this many centipawns. */
 export const CP_CEILING = 1000;
 
-/** Drop in the mover's win chance (percentage points) at which each label starts. */
-export const LABEL_THRESHOLDS = { inaccuracy: 5, mistake: 10, blunder: 15 };
+/**
+ * Drop in the mover's win chance (percentage points) at which each label starts.
+ * Bands follow chess.com's published expected-points table (support.chess.com article 8572705,
+ * dated 2026-02-09): Excellent up to 0.02, Good 0.02-0.05, Inaccuracy 0.05-0.10, Mistake 0.10-0.20,
+ * Blunder 0.20 and over. Approximation: chess.com's curve depends on rating; this one is Lichess's.
+ */
+export const LABEL_THRESHOLDS = { excellent: 2, inaccuracy: 5, mistake: 10, blunder: 20 };
 
-export const LABELS = ['best', 'good', 'inaccuracy', 'mistake', 'blunder'];
+export const LABELS = ['best', 'excellent', 'good', 'inaccuracy', 'mistake', 'blunder'];
 
 /**
  * Collapse an evaluation to capped centipawns from White's point of view.
@@ -63,7 +69,8 @@ export function classify(drop, isBest) {
   if (drop >= LABEL_THRESHOLDS.blunder) return 'blunder';
   if (drop >= LABEL_THRESHOLDS.mistake) return 'mistake';
   if (drop >= LABEL_THRESHOLDS.inaccuracy) return 'inaccuracy';
-  return 'good';
+  if (drop >= LABEL_THRESHOLDS.excellent) return 'good';
+  return 'excellent';
 }
 
 /**
@@ -161,6 +168,17 @@ export function buildAnalysis(game, evals) {
     // tags: mistake categories for statistics; notes: Thai sentences shown to the player.
     return Object.assign(rec, explainMove(rec));
   });
+
+  // Miss: the opponent's previous move was a mistake or blunder, and this move gave most of that
+  // chance back, leaving the position roughly level or worse (chess.com's description of Miss).
+  // Kept apart from `label`, which stays purely a measure of win chance lost.
+  records.forEach((rec, i) => {
+    const prev = records[i - 1];
+    rec.miss = Boolean(prev && (prev.label === 'mistake' || prev.label === 'blunder')
+      && rec.drop >= LABEL_THRESHOLDS.mistake && rec.winAfter <= 60);
+  });
+  const tips = openingTips(game);
+  for (const rec of records) rec.tips = tips.get(rec.ply) || [];
 
   return { evals, whiteWin, records, accuracy: gameAccuracy(whiteWin, game.firstToMove), counts };
 }

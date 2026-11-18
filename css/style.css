@@ -322,3 +322,33 @@ h2.sub { margin-top: 16px; }
 .side-col .moves-card .move-list { max-height: min(34vh, 360px); }
 .move-detail { font-size: 15px; }
 .move-detail .why { font-size: 15.5px; }
+
+/* ---------- richer explanations ---------- */
+.lbl-excellent { background: #96bc4b; }
+.lbl-miss { background: #ee6b55; }
+.chip.lbl-miss { margin-left: 4px; }
+.outcome {
+  margin: 8px 0; padding: 8px 10px; border-radius: 6px;
+  background: var(--panel-2); color: var(--text); line-height: 1.55;
+}
+.tip {
+  margin-top: 10px; padding: 8px 10px; border-radius: 6px;
+  border-left: 3px solid #5b8fd6; background: rgba(91, 143, 214, 0.08); line-height: 1.55;
+}
+.tip-head { font-size: 12.5px; font-weight: 700; color: var(--muted); margin-bottom: 3px; }
+.line-buttons { margin-top: 8px; }
+.line-buttons button { font-size: 13px; padding: 7px 10px; }
+.line-chips { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.line-chips .tip-head { width: 100%; }
+.line-chips button {
+  background: var(--panel-2); color: var(--text); font-weight: 400; font-size: 13px;
+  font-family: Consolas, monospace; padding: 5px 8px; border-radius: 4px;
+}
+.line-chips button.active { background: var(--accent); color: #fff; font-weight: 700; }
+.moments { margin-bottom: 10px; }
+.moment {
+  display: block; width: 100%; text-align: left; margin: 4px 0;
+  background: var(--panel-2); color: var(--text); font-weight: 400; font-size: 14px;
+  border-radius: 6px; padding: 8px 10px; line-height: 1.45;
+}
+button.moment:hover { background: #36332e; }

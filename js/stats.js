@@ -101,7 +101,10 @@ export function computeStats(entries) {
     results: { win: 0, loss: 0, draw: 0 },
     moves: 0,
     accuracy: [],                 // one value per game
-    labels: { best: 0, good: 0, inaccuracy: 0, mistake: 0, blunder: 0 },
+    labels: { best: 0, excellent: 0, good: 0, inaccuracy: 0, mistake: 0, blunder: 0 },
+    misses: 0,                    // moves that failed to punish the opponent's mistake
+    motifs: {},                   // tactic name -> times it decided one of the player's mistakes
+    tips: new Map(),              // opening-principle kind -> { count, text }
     // count = tagged moves; incidents = the same, with a piece left hanging over several
     // consecutive moves counted once.
     categories: new Map(CATEGORIES.map((c) => [c.tag, { count: 0, incidents: 0, games: new Set(), examples: [] }])),
@@ -131,6 +134,13 @@ export function computeStats(entries) {
       if (rec.color !== colour) continue;
       stats.moves += 1;
       stats.labels[rec.label] += 1;
+      if (rec.miss) stats.misses += 1;
+      for (const m of rec.motifs || []) stats.motifs[m] = (stats.motifs[m] || 0) + 1;
+      for (const tip of rec.tips || []) {
+        const t = stats.tips.get(tip.kind) || { count: 0, text: tip.text };
+        t.count += 1;
+        stats.tips.set(tip.kind, t);
+      }
       const labelled = rec.label === 'mistake' || rec.label === 'blunder';
       // Same rule as the review screen's "next mistake" button.
       const serious = labelled

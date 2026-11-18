@@ -6,8 +6,9 @@
 
 import { Chess } from '../vendor/chess.js/chess.js';
 
-export const PIECE_VALUE = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 100 };
-const PIECE_TH = { p: 'เบี้ย', n: 'ม้า', b: 'บิชอป', r: 'เรือ', q: 'ควีน', k: 'คิง' };
+import { PIECE_VALUE, PIECE_TH, backRankMate, detectMotif } from './motifs.js';
+
+export { PIECE_VALUE };
 
 /** Mates longer than this are not reported: they are not something a beginner can act on. */
 const MAX_MATE_DISTANCE = 3;
@@ -159,7 +160,9 @@ function twoMoveTactic(fen, ucis) {
   // naming the square would point at an empty square on the board, so leave it out.
   const arrives = lead.moves[1].to === capture.square;
   const target = arrives ? PIECE_TH[capture.captured] : `${PIECE_TH[capture.captured]}ที่ ${capture.square}`;
-  return { net: balance.net, target };
+  // A tactic name may only be given when the piece it names is the one that is then taken, and
+  // that piece was already standing there when the first move was played.
+  return { net: balance.net, target, square: arrives ? null : capture.square };
 }
 
 /**
@@ -225,18 +228,31 @@ export function explainMove(rec) {
   // and a "good" move in a live game can only matter if a forced mate is involved, so stop early
   // and skip the board work.
   const mateInvolved = Boolean(before || after);
-  if (rec.label === 'best' || (rec.label === 'good' && !decided && !mateInvolved)) {
-    return { tags, notes, targets, replySan };
+  const quietLabel = rec.label === 'good' || rec.label === 'excellent';
+  if (rec.label === 'best' || (quietLabel && !decided && !mateInvolved)) {
+    return { tags, notes, targets, motifs: [], outcome: null, replySan };
   }
+  const motifs = []; // tactic names found, for statistics
+
+  // Material each line leads to, from this player's side: the engine's better line, and the move
+  // played followed by the opponent's best answer. Their difference is what the move cost in material.
+  const bestBal = lineBalance(rec.fenBefore, rec.bestLine);
+  const replyBal = lineBalance(rec.fenAfter, rec.replyLine);
+  const bestNet = bestBal ? bestBal.net : null;
+  const playedNet = replyBal ? iGained - replyBal.net : null;
+  const materialGap = bestNet !== null && playedNet !== null ? bestNet - playedNet : null;
 
   // 1. Missed a forced mate that was available.
   if (before && before.forMe && before.n >= 1 && before.n <= MAX_MATE_DISTANCE
       && !(after && after.forMe) && rec.bestSan && rec.uci !== rec.bestUci) {
     tags.push('missed_mate');
     targets.push(null);
-    notes.push(before.n === 1
+    const backRank = backRankMate(rec.fenBefore, rec.bestLine);
+    if (backRank) motifs.push('back_rank');
+    notes.push((before.n === 1
       ? `มี mate ในตาเดียวด้วย ${rec.bestSan} แต่ไม่ได้เดิน`
-      : `มี mate ใน ${before.n} ตา เริ่มด้วย ${rec.bestSan} แต่ไม่ได้เดิน`);
+      : `มี mate ใน ${before.n} ตา เริ่มด้วย ${rec.bestSan} แต่ไม่ได้เดิน`)
+      + (backRank ? ` (${backRank})` : ''));
   }
 
   // 2. Allowed a forced mate that was not there before.
@@ -244,9 +260,12 @@ export function explainMove(rec) {
       && !(before && !before.forMe) && replySan && rec.label !== 'best') {
     tags.push('allowed_mate');
     targets.push(null);
-    notes.push(after.n === 1
+    const backRank = backRankMate(rec.fenAfter, rec.replyLine);
+    if (backRank) motifs.push('back_rank');
+    notes.push((after.n === 1
       ? `ตานี้เปิดให้${them} mate ได้ในตาเดียวด้วย ${replySan}`
-      : `ตานี้เปิดให้${them} mate ได้ใน ${after.n} ตา เริ่มด้วย ${replySan}`);
+      : `ตานี้เปิดให้${them} mate ได้ใน ${after.n} ตา เริ่มด้วย ${replySan}`)
+      + (backRank ? ` (${backRank})` : ''));
   }
 
   // 3. Left material to be taken: the engine's reply is a capture that wins material.
@@ -263,7 +282,9 @@ export function explainMove(rec) {
       const net = reply.gain - iGained;
       // Also catch pieces hung in already-decided games, where the win chance barely moves.
       const gotWorse = rawScore(rec.evalAfter, me) <= rawScore(rec.evalBefore, me) - 150;
-      if ((flagged && net >= 1) || (rec.label !== 'best' && decided && net >= 3 && gotWorse)) {
+      // The engine's better move must not lose the same material too, or the piece was not the reason.
+      const avoidable = materialGap === null || materialGap >= margin;
+      if (avoidable && ((flagged && net >= 1) || (rec.label !== 'best' && decided && net >= 3 && gotWorse))) {
         tags.push(PIECE_VALUE[reply.captured] >= 3 ? 'hung_piece' : 'hung_pawn');
         targets.push(reply.square);
         notes.push(hungSentence(rec, reply, replyUci));
@@ -278,7 +299,8 @@ export function explainMove(rec) {
     const playedGain = played && played.captured ? played.gain : 0;
     const line = lineBalance(rec.fenBefore, rec.bestLine);
     const margin = best && best.free ? 1 : 2;
-    if (best && best.captured && best.gain >= margin && best.gain > playedGain && line && line.net >= margin) {
+    if (best && best.captured && best.gain >= margin && best.gain > playedGain && line && line.net >= margin
+        && materialGap !== null && materialGap >= margin) {
       tags.push('missed_capture');
       targets.push(best.square);
       const target = `${PIECE_TH[best.captured]}ที่ ${best.square}`;
@@ -297,7 +319,10 @@ export function explainMove(rec) {
       tags.push('allowed_tactic');
       targets.push(null);
       const lead = replySan.includes('+') ? `${them}รุกด้วย ${replySan}` : `${them}เดิน ${replySan}`;
-      notes.push(`${lead} แล้วกิน${tactic.target} ได้ในตาถัดไป (ตามแนวที่ engine คำนวณ)`);
+      const motif = tactic.square ? detectMotif(rec.fenAfter, replyUci, tactic.square) : null;
+      if (motif) motifs.push(motif.kind);
+      notes.push(`${lead} แล้วกิน${tactic.target} ได้ในตาถัดไป (ตามแนวที่ engine คำนวณ)`
+        + (motif ? ` นี่คือ ${motif.text}` : ''));
     }
   }
 
@@ -308,11 +333,58 @@ export function explainMove(rec) {
     if (tactic && tactic.net >= 2) {
       tags.push('missed_tactic');
       targets.push(null);
-      notes.push(`ถ้าเดิน ${rec.bestSan} จะกิน${tactic.target} ได้ในตาถัดไป (ตามแนวที่ engine คำนวณ)`);
+      const motif = tactic.square ? detectMotif(rec.fenBefore, rec.bestUci, tactic.square) : null;
+      if (motif) motifs.push(motif.kind);
+      notes.push(`ถ้าเดิน ${rec.bestSan} จะกิน${tactic.target} ได้ในตาถัดไป (ตามแนวที่ engine คำนวณ)`
+        + (motif ? ` นี่คือ ${motif.text}` : ''));
     }
   }
 
-  return { tags, notes, targets, replySan };
+  const outcome = flagged ? outcomeSentence(rec, iGained, mateInvolved) : null;
+  return { tags, notes, targets, motifs, outcome, replySan };
+}
+
+/**
+ * Thai wording for a material balance in pawn units.
+ * @param {number} n Net material for the player (positive = gained).
+ * @returns {string}
+ */
+function materialPhrase(n) {
+  if (n > 0) return `ได้หมากเพิ่ม ${n} แต้ม`;
+  if (n < 0) return `เสียหมาก ${-n} แต้ม`;
+  return 'ไม่ได้ไม่เสียหมาก';
+}
+
+/**
+ * Compare where the engine's best line and the line after the move played lead, in material.
+ * This is the general "why was the other move better" answer, and it applies to every flagged
+ * move, including the ones no specific rule explains.
+ * @param {object} rec Move record.
+ * @param {number} iGained Material the played move itself took.
+ * @param {boolean} mateInvolved Whether either evaluation is a forced mate.
+ * @returns {string | null}
+ */
+function outcomeSentence(rec, iGained, mateInvolved) {
+  if (mateInvolved || !rec.bestSan || rec.bestUci === rec.uci) return null;
+  const best = lineBalance(rec.fenBefore, rec.bestLine);
+  const reply = lineBalance(rec.fenAfter, rec.replyLine);
+  if (!best || !reply) return null;
+  const bestNet = best.net;
+  const playedNet = iGained - reply.net;
+  const moves = Math.ceil(Math.max(best.plies, reply.plies + 1) / 2);
+  const who = rec.color === 'w' ? 'ขาว' : 'ดำ';
+  const head = `ตามแนวที่ engine คำนวณต่ออีกราว ${moves} ตา:`;
+  if (bestNet === playedNet) {
+    return `${head} ทั้งตาที่เดินจริงและ ${rec.bestSan} ให้ผลเรื่องหมากเท่ากัน (${materialPhrase(playedNet)}) ` +
+      'ความต่างจึงอยู่ที่ตำแหน่งหมาก เช่น หมากที่ทำงานได้มากกว่าหรือคิงที่ปลอดภัยกว่า ไม่ใช่การเสียหมาก';
+  }
+  if (bestNet < playedNet) {
+    return `${head} แนว ${rec.bestSan} ${materialPhrase(bestNet)} ส่วนตาที่เดินจริง${materialPhrase(playedNet)} ` +
+      'ตาที่เดินจริงจึงดีกว่าในแง่หมาก แต่ engine ยังประเมินว่าแย่กว่าด้วยเหตุผลด้านตำแหน่ง ' +
+      'ซึ่งตัวอธิบายนี้ยังระบุไม่ได้';
+  }
+  return `${head} ถ้าเดิน ${rec.bestSan} ${who}จะ${materialPhrase(bestNet)} ` +
+    `แต่ตาที่เดินจริง ${who}จะ${materialPhrase(playedNet)} ต่างกัน ${bestNet - playedNet} แต้ม`;
 }
 
 /**

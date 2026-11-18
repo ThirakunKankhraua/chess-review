@@ -3,7 +3,8 @@
 import { Chess } from '../vendor/chess.js/chess.js';
 import { Board } from './board.js';
 import { Engine } from './engine.js';
-import { buildAnalysis, formatEval, LABEL_THRESHOLDS } from './analysis.js';
+import { buildAnalysis, formatEval, LABEL_THRESHOLDS, LABELS } from './analysis.js';
+import { openingName } from './opening.js';
 import { cacheAll, cacheGet, cachePut } from './cache.js';
 import { CATEGORIES, PHASES, computeStats } from './stats.js';
 
@@ -17,7 +18,21 @@ const DRAW_CODES = new Set([
   'agreed', 'repetition', 'stalemate', 'insufficient', '50move', 'timevsinsufficient',
 ]);
 const LABEL_TEXT = {
-  best: 'Best', good: 'Good', inaccuracy: 'Inaccuracy', mistake: 'Mistake', blunder: 'Blunder',
+  best: 'Best', excellent: 'Excellent', good: 'Good', inaccuracy: 'Inaccuracy', mistake: 'Mistake',
+  blunder: 'Blunder',
+};
+/** Short Thai names of the opening principles, for the statistics page. */
+const TIP_NAME = {
+  early_queen: 'ออกควีนเร็วเกินไป',
+  king_walk: 'เดินคิงเองจนเสียสิทธิ์ castle',
+  repeat_piece: 'เดินหมากตัวเดิมซ้ำช่วงเปิดเกม',
+  f_pawn: 'เดินเบี้ย f ช่วงต้นเกม',
+  flank_pawns: 'เดินเบี้ยริมกระดานแทนการคุมกลาง',
+  no_castle: 'ผ่านตาที่ 12 แล้วยังไม่ castle',
+};
+/** Names of tactics, for the statistics page. */
+const MOTIF_TEXT = {
+  fork: 'fork', pin: 'pin', skewer: 'skewer', discovered: 'discovered attack', back_rank: 'back-rank mate',
 };
 const LABEL_MARK = { inaccuracy: '?!', mistake: '?', blunder: '??' };
 const MATE_TAGS = ['missed_mate', 'allowed_mate'];
@@ -46,8 +61,14 @@ const board = new Board($('board'));
 let game = null;
 /** Index into game.positions: 0 = start position, n = after the n-th half-move. */
 let ply = 0;
-/** When true the board shows the position before the current move, with the better move drawn. */
-let showBetter = false;
+/**
+ * Engine line being replayed on the board for the current move, or null for the game itself.
+ * kind 'best' = the line the engine preferred; 'reply' = how the opponent punishes the move.
+ * @type {null | {kind: 'best' | 'reply', step: number}}
+ */
+let lineView = null;
+/** Longest engine line offered for replay, in plies. */
+const LINE_MAX = 10;
 /** Created on first use so the loader view stays light. */
 let engine = null;
 /** Incremented whenever an analysis run should be abandoned. */
@@ -280,7 +301,58 @@ function renderGameInfo() {
   if (h.Date) lines.push(`วันที่ ${h.Date}`);
   if (h.Result) lines.push(`ผล ${h.Result}`);
   if (h.Termination) lines.push(h.Termination);
+  const opening = openingName(h);
+  if (opening) lines.push(`Opening: ${opening}${h.ECO ? ` (${h.ECO})` : ''}`);
   for (const line of lines) info.appendChild(el('div', '', line));
+}
+
+/**
+ * Short Thai summary of the player's game: the turning point, when it went wrong, and how
+ * many chances were missed. Each line jumps to its move.
+ */
+function renderMoments() {
+  const box = $('moments');
+  box.replaceChildren();
+  const colour = game.userColour;
+  if (!colour) return; // only meaningful when we know which side is the player
+  const mine = game.analysis.records.filter((r) => r.color === colour);
+  const theirs = game.analysis.records.filter((r) => r.color !== colour);
+  const items = [];
+
+  const worst = mine.reduce((a, r) => (r.drop > (a ? a.drop : 0) ? r : a), null);
+  if (worst && worst.drop >= LABEL_THRESHOLDS.mistake) {
+    items.push({
+      ply: worst.ply,
+      text: `จุดเปลี่ยนของเกม: ตาที่ ${Math.ceil(worst.ply / 2)} ${worst.san} โอกาสชนะของคุณตกจาก ` +
+        `${Math.round(worst.winBefore)}% เหลือ ${Math.round(worst.winAfter)}%`,
+    });
+  }
+  const lost = mine.find((r) => r.winBefore >= 40 && r.winAfter < 25);
+  if (lost && lost !== worst) {
+    items.push({
+      ply: lost.ply,
+      text: `เริ่มเสียเปรียบหนักตั้งแต่ตาที่ ${Math.ceil(lost.ply / 2)} ${lost.san} ` +
+        `(โอกาสชนะเหลือ ${Math.round(lost.winAfter)}%)`,
+    });
+  }
+  const hung = mine.filter((r) => r.tags.includes('hung_piece')).length;
+  const gifts = theirs.filter((r) => r.label === 'mistake' || r.label === 'blunder').length;
+  const missed = mine.filter((r) => r.miss);
+  items.push({
+    ply: missed.length ? missed[0].ply : null,
+    text: `อีกฝ่ายเดินพลาด (Mistake หรือ Blunder) ${gifts} ครั้ง คุณพลาดโอกาสลงโทษ (Miss) ${missed.length} ครั้ง` +
+      ` และทิ้งหมากตัวใหญ่ให้กินฟรี ${hung} ครั้ง`,
+  });
+
+  box.appendChild(el('div', 'tip-head', 'สรุปเกมของคุณ'));
+  for (const item of items) {
+    const row = el(item.ply ? 'button' : 'div', 'moment', item.text);
+    if (item.ply) {
+      row.type = 'button';
+      row.addEventListener('click', () => goTo(item.ply));
+    }
+    box.appendChild(row);
+  }
 }
 
 /** Build the clickable move list, one row per full move, with label marks once analysed. */
@@ -331,15 +403,21 @@ function renderSummary() {
   addRow('Accuracy (สูตร Lichess)', fmt(a.accuracy.w), fmt(a.accuracy.b), 'acc');
   const ref = game.meta.accuracies;
   if (ref) addRow('Accuracy จาก chess.com', fmt(ref.white), fmt(ref.black));
-  for (const label of ['best', 'good', 'inaccuracy', 'mistake', 'blunder']) {
+  for (const label of LABELS) {
     addRow(LABEL_TEXT[label], String(a.counts.w[label]), String(a.counts.b[label]), '', label);
   }
+  const misses = { w: 0, b: 0 };
+  for (const rec of a.records) if (rec.miss) misses[rec.color] += 1;
+  addRow('Miss', String(misses.w), String(misses.b), '', 'miss');
 
   $('analysisNote').textContent =
     `วิเคราะห์ด้วย ${engine ? engine.name : 'Stockfish 19 Lite'} ที่ depth ${DEPTH} ` +
     `Accuracy คำนวณตามสูตรที่ Lichess เผยแพร่ จึงไม่ตรงกับ chess.com เป๊ะ ` +
-    `ป้ายกำกับคิดจากโอกาสชนะที่ลดลง: Inaccuracy ${LABEL_THRESHOLDS.inaccuracy}, ` +
-    `Mistake ${LABEL_THRESHOLDS.mistake}, Blunder ${LABEL_THRESHOLDS.blunder} จุดเปอร์เซ็นต์ขึ้นไป`;
+    `ป้ายกำกับคิดจากโอกาสชนะที่ลดลง ตามช่วงที่ chess.com เผยแพร่: Excellent ไม่เกิน ` +
+    `${LABEL_THRESHOLDS.excellent}, Inaccuracy ${LABEL_THRESHOLDS.inaccuracy}, ` +
+    `Mistake ${LABEL_THRESHOLDS.mistake}, Blunder ${LABEL_THRESHOLDS.blunder} จุดเปอร์เซ็นต์ขึ้นไป ` +
+    'Miss คือพลาดโอกาสลงโทษตาที่อีกฝ่ายเพิ่งเดินพลาด';
+  renderMoments();
   renderGraph();
 }
 
@@ -440,33 +518,144 @@ function renderMoveDetail() {
   if (!game.analysis) return;
 
   const rec = game.analysis.records[ply - 1];
+  const them = move.color === 'w' ? 'ดำ' : 'ขาว';
   status.appendChild(el('span', `chip lbl-${rec.label}`, LABEL_TEXT[rec.label]));
+  if (rec.miss) status.appendChild(el('span', 'chip lbl-miss', 'Miss'));
 
   box.appendChild(el('div', '',
     `โอกาสชนะของ${side}: ${Math.round(rec.winBefore)}% เป็น ${Math.round(rec.winAfter)}% ` +
     `(eval ${formatEval(rec.evalBefore)} เป็น ${formatEval(rec.evalAfter)})`));
 
+  if (rec.miss) {
+    box.appendChild(el('div', 'why',
+      `${them}เพิ่งเดินพลาดในตาก่อนหน้า แต่ตานี้ไม่ได้ลงโทษ โอกาสที่ได้มาจึงหลุดไป`));
+  }
   for (const note of rec.notes) box.appendChild(el('div', 'why', note));
 
   const flagged = Boolean(LABEL_MARK[rec.label]);
-  if (flagged && rec.notes.length === 0) {
+  if (flagged && rec.notes.length === 0 && !rec.outcome) {
     box.appendChild(el('div', '', 'ตัวอธิบายอัตโนมัติยังระบุสาเหตุของตานี้ไม่ได้ ลองเทียบกับตาที่ engine เลือก'));
   }
-  if (showsReply(rec) && !showBetter) {
+  if (rec.outcome) box.appendChild(el('div', 'outcome', rec.outcome));
+
+  if (showsReply(rec) && !lineView) {
     const reply = el('div');
-    reply.append(`${move.color === 'w' ? 'ดำ' : 'ขาว'}ตอบได้ด้วย `, el('strong', '', rec.replySan), ' (ลูกศรสีส้ม)');
+    reply.append(`${them}ตอบได้ด้วย `, el('strong', '', rec.replySan), ' (ลูกศรสีส้ม)');
     box.appendChild(reply);
   }
-  if (rec.label !== 'best' && rec.bestSan) {
+  if (rec.label !== 'best' && rec.bestSan && !lineView) {
     const line = el('div');
     line.append('Engine ชอบ ', el('strong', '', rec.bestSan), ' มากกว่า');
     box.appendChild(line);
-    const btn = el('button', 'ghost', showBetter ? 'กลับไปดูตาที่เดินจริง' : 'ดูตาที่ดีกว่าบนกระดาน');
-    btn.type = 'button';
-    btn.id = 'betterBtn';
-    btn.addEventListener('click', toggleBetter);
-    box.appendChild(btn);
   }
+
+  // Buttons to replay either engine line on the board, one move at a time.
+  const buttons = el('div', 'row line-buttons');
+  const addLineButton = (kind, text) => {
+    const active = lineView && lineView.kind === kind;
+    const btn = el('button', active ? '' : 'ghost', active ? 'กลับไปดูตาที่เดินจริง' : text);
+    btn.type = 'button';
+    btn.dataset.line = kind;
+    btn.addEventListener('click', () => toggleLine(kind));
+    buttons.appendChild(btn);
+  };
+  if (rec.label !== 'best' && rec.bestSan) addLineButton('best', 'ดูตาที่ดีกว่าบนกระดาน');
+  if (showsReply(rec) && rec.replyLine.length > 1) addLineButton('reply', `ดูว่า${them}ลงโทษอย่างไร`);
+  if (buttons.children.length) box.appendChild(buttons);
+  if (lineView) box.appendChild(renderLineChips(rec));
+
+  for (const tip of rec.tips) {
+    const card = el('div', 'tip');
+    card.append(el('div', 'tip-head', 'หลักทั่วไปช่วงเปิดเกม'), el('div', '', tip.text));
+    box.appendChild(card);
+  }
+}
+
+/**
+ * Starting position and moves of the engine line currently being replayed.
+ * @param {object} rec Move record.
+ * @returns {{fen: string, ucis: string[], firstIsMover: boolean}}
+ */
+function currentLine(rec) {
+  return lineView.kind === 'best'
+    ? { fen: rec.fenBefore, ucis: rec.bestLine.slice(0, LINE_MAX), firstIsMover: true }
+    : { fen: rec.fenAfter, ucis: rec.replyLine.slice(0, LINE_MAX), firstIsMover: false };
+}
+
+/**
+ * Play the first `count` moves of a UCI line.
+ * @param {string} fen
+ * @param {string[]} ucis
+ * @param {number} count
+ * @returns {{fen: string, moves: object[]}} Stops early at the first illegal move.
+ */
+function playUcis(fen, ucis, count) {
+  const chess = new Chess(fen);
+  const moves = [];
+  for (const u of ucis.slice(0, count)) {
+    try {
+      moves.push(chess.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u[4] }));
+    } catch {
+      break;
+    }
+  }
+  return { fen: chess.fen(), moves };
+}
+
+/**
+ * Clickable list of the moves in the engine line being replayed.
+ * @param {object} rec Move record.
+ * @returns {HTMLElement}
+ */
+function renderLineChips(rec) {
+  const { fen, ucis } = currentLine(rec);
+  const { moves } = playUcis(fen, ucis, ucis.length);
+  const wrap = el('div', 'line-chips');
+  const title = lineView.kind === 'best' ? 'แนวที่ดีกว่า (engine)' : 'แนวที่อีกฝ่ายลงโทษ (engine)';
+  wrap.appendChild(el('div', 'tip-head', `${title}: กดทีละตา หรือใช้ลูกศรซ้าย/ขวา กด Esc เพื่อกลับ`));
+  const startBtn = el('button', lineView.step === 0 ? 'active' : '', 'เริ่ม');
+  startBtn.type = 'button';
+  startBtn.addEventListener('click', () => setLineStep(0));
+  wrap.appendChild(startBtn);
+  let moveNo = Number(fen.split(' ')[5]);
+  moves.forEach((m, i) => {
+    const label = m.color === 'w' ? `${moveNo}. ${m.san}` : (i === 0 ? `${moveNo}... ${m.san}` : m.san);
+    if (m.color === 'b') moveNo += 1;
+    const btn = el('button', lineView.step === i + 1 ? 'active' : '', label);
+    btn.type = 'button';
+    btn.addEventListener('click', () => setLineStep(i + 1));
+    wrap.appendChild(btn);
+  });
+  return wrap;
+}
+
+/**
+ * Show a given step of the engine line being replayed.
+ * @param {number} step Plies into the line (0 = its starting position).
+ */
+function setLineStep(step) {
+  const rec = game.analysis.records[ply - 1];
+  const { fen, ucis } = currentLine(rec);
+  const { moves } = playUcis(fen, ucis, ucis.length);
+  const target = Math.max(0, Math.min(moves.length, step));
+  const forward = target === lineView.step + 1 ? moves[target - 1] : null;
+  lineView.step = target;
+  renderBoard(forward ? { from: forward.from, to: forward.to } : null);
+  renderMoveDetail();
+}
+
+/**
+ * Start or stop replaying one of the engine lines for the current move.
+ * @param {'best' | 'reply'} kind
+ */
+function toggleLine(kind) {
+  if (!game || !game.analysis || ply === 0) return;
+  const rec = game.analysis.records[ply - 1];
+  if (kind === 'best' && (rec.label === 'best' || !rec.bestUci)) return;
+  if (kind === 'reply' && !showsReply(rec)) return;
+  lineView = lineView && lineView.kind === kind ? null : { kind, step: kind === 'reply' ? 1 : 0 };
+  renderBoard();
+  renderMoveDetail();
 }
 
 /**
@@ -479,14 +668,9 @@ function showsReply(rec) {
   return Boolean(rec && rec.replySan && rec.replyLine[0] && (markFor(rec) !== null || rec.notes.length > 0));
 }
 
-/** Switch between the position after the move and the "what should have been played" view. */
+/** Keyboard shortcut B: switch the better-move replay on or off. */
 function toggleBetter() {
-  if (!game || !game.analysis || ply === 0) return;
-  const rec = game.analysis.records[ply - 1];
-  if (rec.label === 'best' || !rec.bestUci) return;
-  showBetter = !showBetter;
-  renderBoard();
-  renderMoveDetail();
+  toggleLine('best');
 }
 
 /**
@@ -497,13 +681,27 @@ function renderBoard(animate = null) {
   const last = ply > 0 ? game.moves[ply - 1] : null;
   const rec = game.analysis && ply > 0 ? game.analysis.records[ply - 1] : null;
 
-  if (showBetter && rec && rec.bestUci) {
-    board.render(rec.fenBefore, null, {
-      arrows: [
-        { from: last.from, to: last.to, colour: ARROW.played },
-        { from: rec.bestUci.slice(0, 2), to: rec.bestUci.slice(2, 4), colour: ARROW.best },
-      ],
-    });
+  if (lineView && rec) {
+    if (lineView.kind === 'best' && lineView.step === 0) {
+      // Before the move: the move played (red) against the engine's choice (green).
+      board.render(rec.fenBefore, null, {
+        arrows: [
+          { from: last.from, to: last.to, colour: ARROW.played },
+          { from: rec.bestUci.slice(0, 2), to: rec.bestUci.slice(2, 4), colour: ARROW.best },
+        ],
+      });
+      return;
+    }
+    const { fen, ucis, firstIsMover } = currentLine(rec);
+    const shown = playUcis(fen, ucis, lineView.step);
+    const prev = shown.moves.at(-1);
+    // Arrow for the next move of the line: green for the player's moves, orange for the opponent's.
+    const next = ucis[shown.moves.length];
+    const nextIsMover = (shown.moves.length % 2 === 0) === firstIsMover;
+    const arrows = next
+      ? [{ from: next.slice(0, 2), to: next.slice(2, 4), colour: nextIsMover ? ARROW.best : ARROW.reply }]
+      : [];
+    board.render(shown.fen, prev ? { from: prev.from, to: prev.to } : null, { arrows, animate });
     return;
   }
   const mark = markFor(rec);
@@ -522,7 +720,7 @@ function goTo(target) {
   if (!game) return;
   const previous = ply;
   ply = Math.max(0, Math.min(game.moves.length, target));
-  showBetter = false;
+  lineView = null;
   // Slide the piece when stepping one move at a time; jumps redraw instantly.
   let animate = null;
   if (ply === previous + 1) animate = { from: game.moves[ply - 1].from, to: game.moves[ply - 1].to };
@@ -697,6 +895,19 @@ function renderStats(stats) {
   addTile(`${stats.results.win} / ${stats.results.loss} / ${stats.results.draw}`, 'ชนะ / แพ้ / เสมอ');
   addTile(stats.meanAccuracy === null ? '-' : stats.meanAccuracy.toFixed(1), 'Accuracy เฉลี่ย (สูตร Lichess)');
   addTile((serious / stats.games).toFixed(1), 'Mistake + Blunder ต่อเกม');
+  addTile((stats.misses / stats.games).toFixed(1), 'Miss ต่อเกม (พลาดโอกาสลงโทษ)');
+
+  const tipRows = [...stats.tips.entries()].sort((x, y) => y[1].count - x[1].count);
+  const tipsBox = $('statsTips');
+  tipsBox.replaceChildren();
+  if (tipRows.length === 0) tipsBox.textContent = 'ไม่พบ';
+  for (const [kind, t] of tipRows) {
+    tipsBox.appendChild(el('div', '', `${TIP_NAME[kind] || kind}: ${t.count} เกม จาก ${stats.games} เกม`));
+  }
+  const motifRows = Object.entries(stats.motifs).sort((x, y) => y[1] - x[1]);
+  $('statsMotifs').textContent = motifRows.length
+    ? motifRows.map(([k, n]) => `${MOTIF_TEXT[k] || k} ${n} ครั้ง`).join(', ')
+    : 'ยังไม่พบ tactic ที่ระบุชื่อได้';
 
   // Categories, most frequent first.
   const rows = CATEGORIES
@@ -1048,9 +1259,12 @@ $('evalGraph').addEventListener('click', (e) => {
 document.addEventListener('keydown', (e) => {
   const typing = e.target instanceof Element && e.target.matches('input, textarea');
   if (!game || typing || e.ctrlKey || e.metaKey || e.altKey) return;
+  // While an engine line is being replayed, the arrow keys step through that line instead.
+  const inLine = lineView !== null;
   const actions = {
-    ArrowLeft: () => goTo(ply - 1),
-    ArrowRight: () => goTo(ply + 1),
+    ArrowLeft: () => (inLine ? setLineStep(lineView.step - 1) : goTo(ply - 1)),
+    ArrowRight: () => (inLine ? setLineStep(lineView.step + 1) : goTo(ply + 1)),
+    Escape: () => { if (inLine) toggleLine(lineView.kind); },
     Home: () => goTo(0),
     End: () => goTo(game.moves.length),
     KeyF: flipBoard,

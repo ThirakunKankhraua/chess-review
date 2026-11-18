@@ -79,6 +79,10 @@
     <div class="card" id="statsMoreCard" hidden>
       <h2>พลาดช่วงไหนของเกม</h2>
       <table class="summary" id="statsPhases"></table>
+      <h2 class="sub">หลักเปิดเกมที่ฝ่าฝืนบ่อย</h2>
+      <div id="statsTips" class="move-detail"></div>
+      <h2 class="sub">tactic ที่เกี่ยวกับข้อผิดพลาดของคุณ</h2>
+      <p id="statsMotifs" class="move-detail"></p>
       <h2 class="sub">เวลาที่ใช้คิด</h2>
       <p id="statsTime" class="move-detail"></p>
       <p id="statsNote" class="note"></p>
@@ -133,6 +137,7 @@
           <div class="progress"><div id="progressFill" class="progress-fill"></div></div>
         </div>
         <div id="summaryBox" hidden>
+          <div id="moments" class="moments"></div>
           <table class="summary">
             <thead><tr><th></th><th id="sumWhiteName"></th><th id="sumBlackName"></th></tr></thead>
             <tbody id="summaryBody"></tbody>

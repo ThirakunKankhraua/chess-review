@@ -26,9 +26,14 @@ Then open `http://localhost:4620`.
 ## Method and limits
 
 - Engine: Stockfish 19 Lite, single-threaded WASM, fixed depth 14 on desktop and 12 on touch devices.
-- Win chance, move labels (5 / 10 / 15 percentage-point drops) and accuracy follow the formulas in
+- Win chance and accuracy follow the formulas in
   the published Lichess source. chess.com does not publish its formulas, so accuracy here differs
   from chess.com's; on 5 reference games the mean absolute gap was about 11 points.
+- Move labels use the expected-points bands chess.com publishes (support article 8572705, dated
+  2026-02-09): Excellent under 2, Inaccuracy 5, Mistake 10, Blunder 20 percentage points of win chance
+  lost. Miss marks a move that failed to punish the opponent's mistake. Brilliant and Great are not used.
+- Tactic names (fork, pin, skewer, discovered attack, back-rank mate) are given only when the board
+  shows that pattern aimed at the piece the engine line then wins. Opening tips are general rules of thumb.
 - Material claims use 1/3/3/5/9 piece values and must be confirmed twice: by the exchange on the
   square and by the engine's own continuation. Positional mistakes are not explained.
 - Analyses are stored in the browser's IndexedDB. Each browser and device keeps its own copy.
