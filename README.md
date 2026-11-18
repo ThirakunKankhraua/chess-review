@@ -35,5 +35,6 @@ Then open `http://localhost:4620`.
 
 ## Third-party components
 
-See [vendor/README.md](vendor/README.md). Stockfish is GPL-3.0, chess.js is BSD-2-Clause,
-and the cburnett piece images are GPLv2+. Their licence files are kept alongside them.
+See [vendor/README.md](vendor/README.md). Stockfish is GPL-3.0 and chess.js is BSD-2-Clause.
+The "maestro" pieces (by sadsnake1) are CC BY-NC-SA 4.0 and the wood board image (lila authors)
+is AGPLv3+, both from the Lichess repository. This project is non-commercial.

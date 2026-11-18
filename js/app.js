@@ -36,6 +36,8 @@ function markFor(rec) {
   return null;
 }
 const SVG_NS = 'http://www.w3.org/2000/svg';
+/** Arrow colours: the move played, the engine's choice, and the opponent's best answer. */
+const ARROW = { played: '#e04b3a', best: '#7fb33f', reply: '#f39a24' };
 
 const $ = (id) => document.getElementById(id);
 const board = new Board($('board'));
@@ -487,16 +489,19 @@ function toggleBetter() {
   renderMoveDetail();
 }
 
-/** Draw the board for the current ply, with badge or comparison arrows as needed. */
-function renderBoard() {
+/**
+ * Draw the board for the current ply, with badge or comparison arrows as needed.
+ * @param {{from: string, to: string} | null} animate Piece slide to play, if any.
+ */
+function renderBoard(animate = null) {
   const last = ply > 0 ? game.moves[ply - 1] : null;
   const rec = game.analysis && ply > 0 ? game.analysis.records[ply - 1] : null;
 
   if (showBetter && rec && rec.bestUci) {
     board.render(rec.fenBefore, null, {
       arrows: [
-        { from: last.from, to: last.to, colour: '#e05656' },
-        { from: rec.bestUci.slice(0, 2), to: rec.bestUci.slice(2, 4), colour: '#4f9d3a' },
+        { from: last.from, to: last.to, colour: ARROW.played },
+        { from: rec.bestUci.slice(0, 2), to: rec.bestUci.slice(2, 4), colour: ARROW.best },
       ],
     });
     return;
@@ -505,8 +510,8 @@ function renderBoard() {
   const badge = mark ? { square: last.to, text: mark.text, cls: mark.cls } : null;
   // For a flagged move, draw the opponent's best answer so the punishment is visible.
   const reply = showsReply(rec) ? rec.replyLine[0] : null;
-  const arrows = reply ? [{ from: reply.slice(0, 2), to: reply.slice(2, 4), colour: '#e58f2a' }] : [];
-  board.render(game.positions[ply], last ? { from: last.from, to: last.to } : null, { badge, arrows });
+  const arrows = reply ? [{ from: reply.slice(0, 2), to: reply.slice(2, 4), colour: ARROW.reply }] : [];
+  board.render(game.positions[ply], last ? { from: last.from, to: last.to } : null, { badge, arrows, animate });
 }
 
 /**
@@ -515,9 +520,14 @@ function renderBoard() {
  */
 function goTo(target) {
   if (!game) return;
+  const previous = ply;
   ply = Math.max(0, Math.min(game.moves.length, target));
   showBetter = false;
-  renderBoard();
+  // Slide the piece when stepping one move at a time; jumps redraw instantly.
+  let animate = null;
+  if (ply === previous + 1) animate = { from: game.moves[ply - 1].from, to: game.moves[ply - 1].to };
+  else if (ply === previous - 1) animate = { from: game.moves[ply].to, to: game.moves[ply].from };
+  renderBoard(animate);
   renderPlayers();
   renderEvalBar();
   renderMoveDetail();
@@ -1058,8 +1068,17 @@ const narrowScreen = window.matchMedia('(max-width: 920px)');
 /** Move the explanation card to the right place for the current screen width. */
 function placeMoveCard() {
   const card = document.querySelector('.move-card');
-  if (narrowScreen.matches) document.querySelector('.mistake-nav').after(card);
-  else document.querySelector('.side-col').prepend(card);
+  const nav = document.querySelector('.nav-block');
+  if (narrowScreen.matches) {
+    // Phone: buttons right under the board, then the explanation.
+    $('playerBottom').after(nav);
+    nav.after(card);
+  } else {
+    // Wide screen: the board gets the full height; explanation and buttons sit beside it.
+    document.querySelector('.side-col').prepend(card);
+    card.after(nav);
+    nav.after(document.querySelector('.moves-card'));
+  }
 }
 narrowScreen.addEventListener('change', placeMoveCard);
 placeMoveCard();

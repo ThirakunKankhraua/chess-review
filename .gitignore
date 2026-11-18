@@ -1,2 +1,5 @@
 # Early engine/API test page; not part of the app.
 spike.html
+
+# Local design comparison page (loads images from the Lichess repo for preview only).
+design-preview.html

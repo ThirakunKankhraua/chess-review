@@ -1,7 +1,9 @@
 // Read-only chess board renderer: draws a FEN position into a CSS grid.
 
 const FILES = 'abcdefgh';
-const PIECE_DIR = 'vendor/pieces/cburnett/';
+const PIECE_DIR = 'vendor/pieces/maestro/';
+/** Duration of the slide when a piece moves, in milliseconds. */
+const MOVE_MS = 170;
 
 /**
  * Convert the piece-placement field of a FEN string into a square -> piece map.
@@ -52,7 +54,9 @@ export class Board {
    * @param {string} fen Position to show.
    * @param {{from: string, to: string} | null} lastMove Squares to highlight, if any.
    * @param {{arrows?: {from: string, to: string, colour: string}[],
-   *          badge?: {square: string, text: string, cls: string} | null}} extras Overlays.
+   *          badge?: {square: string, text: string, cls: string} | null,
+   *          animate?: {from: string, to: string} | null}} extras Overlays; `animate` slides the
+   *   piece now standing on `to` in from `from`.
    */
   render(fen, lastMove = null, extras = {}) {
     this.fen = fen;
@@ -103,6 +107,27 @@ export class Board {
       frag.appendChild(svg);
     }
     this.el.replaceChildren(frag);
+    if (extras.animate) this.slide(extras.animate.from, extras.animate.to);
+  }
+
+  /**
+   * Slide the piece on `to` in from `from`, so a step through the game reads as a move
+   * rather than a jump. Only the one moved piece is animated; the board itself is redrawn.
+   * @param {string} from
+   * @param {string} to
+   */
+  slide(from, to) {
+    const img = this.el.querySelector(`[data-square="${to}"] img`);
+    if (!img || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const [x1, y1] = this.squareCentre(from);
+    const [x2, y2] = this.squareCentre(to);
+    // The image is exactly one square in size, so 100% = one square.
+    img.style.transform = `translate(${(x1 - x2) * 100}%, ${(y1 - y2) * 100}%)`;
+    img.style.zIndex = '3';
+    img.getBoundingClientRect(); // commit the start position before animating
+    img.style.transition = `transform ${MOVE_MS}ms ease-out`;
+    img.style.transform = '';
+    img.addEventListener('transitionend', () => { img.style.zIndex = ''; img.style.transition = ''; }, { once: true });
   }
 
   /**
@@ -152,7 +177,11 @@ export class Board {
     const poly = document.createElementNS(SVG_NS, 'polygon');
     poly.setAttribute('points', pts.map((p) => p.map((v) => v.toFixed(3)).join(',')).join(' '));
     poly.setAttribute('fill', colour);
-    poly.setAttribute('opacity', '0.85');
+    poly.setAttribute('opacity', '0.9');
+    // A thin dark edge keeps arrows readable on both the light and the dark wood squares.
+    poly.setAttribute('stroke', 'rgba(0, 0, 0, 0.45)');
+    poly.setAttribute('stroke-width', '0.03');
+    poly.setAttribute('stroke-linejoin', 'round');
     return poly;
   }
 }
