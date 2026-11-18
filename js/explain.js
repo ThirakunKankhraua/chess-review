@@ -202,6 +202,33 @@ function flipTurn(fen) {
 }
 
 /**
+ * Pieces of one colour that the other side could win right now: a capture on that square gains
+ * material even after every recapture (same exchange count as the explanations use).
+ * @param {string} fen Position.
+ * @param {'w' | 'b'} colour Whose pieces to check.
+ * @returns {string[]} Squares of the threatened pieces (kings are not included).
+ */
+export function hangingSquares(fen, colour) {
+  const parts = fen.split(' ');
+  parts[1] = colour === 'w' ? 'b' : 'w'; // let the attacker be the side to move
+  parts[3] = '-';
+  let chess;
+  try {
+    chess = new Chess(parts.join(' '));
+  } catch {
+    return [];
+  }
+  const squares = [];
+  for (const row of chess.board()) {
+    for (const cell of row) {
+      if (!cell || cell.color !== colour || cell.type === 'k') continue;
+      if (exchangeGain(chess, cell.square) > 0) squares.push(cell.square);
+    }
+  }
+  return squares;
+}
+
+/**
  * Explain one move.
  * @param {object} rec Move record from buildAnalysis (before tags are filled).
  * @returns {{tags: string[], notes: string[], targets: (string | null)[], replySan: string | null}}

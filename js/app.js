@@ -5,6 +5,8 @@ import { Board } from './board.js';
 import { Engine } from './engine.js';
 import { buildAnalysis, formatEval, LABEL_THRESHOLDS, LABELS } from './analysis.js';
 import { openingName } from './opening.js';
+import { hangingSquares } from './explain.js';
+import { startPractice, stopPractice } from './practice.js';
 import { cacheAll, cacheGet, cachePut } from './cache.js';
 import { CATEGORIES, PHASES, computeStats } from './stats.js';
 
@@ -288,8 +290,43 @@ function showView(name) {
   $('loaderView').hidden = name !== 'loader';
   $('reviewView').hidden = name !== 'review';
   $('statsView').hidden = name !== 'stats';
+  $('practiceView').hidden = name !== 'practice';
   $('backBtn').hidden = name === 'loader';
   $('statsBtn').hidden = name === 'stats';
+  $('practiceBtn').hidden = name === 'practice';
+  if (name !== 'practice') stopPractice();
+}
+
+/** Open practice mode with puzzles built from every analysed game of the player. */
+async function openPractice() {
+  const run = ++statsRun;
+  cancelAnalysis();
+  game = null;
+  showView('practice');
+  $('practiceCard').hidden = true;
+  if (!loadSavedUsername()) {
+    setStatus('practiceStatus', 'ยังไม่รู้ว่าคุณคือผู้เล่นคนไหน กลับไปโหลดเกมด้วย username ก่อน', true);
+    return;
+  }
+  setStatus('practiceStatus', 'กำลังรวบรวมโจทย์...');
+  const entries = await loadUserEntries(
+    (done, total) => setStatus('practiceStatus', `กำลังรวบรวมโจทย์ ${done}/${total} เกม...`),
+    () => $('practiceView').hidden || run !== statsRun,
+  );
+  if (!entries) return;
+  if (!engine) engine = new Engine(ENGINE_PATH);
+  startPractice({
+    entries,
+    evaluate: evaluatePosition,
+    openGame: (gameId, atPly) => {
+      const rec = statsSaved.get(gameId);
+      if (!rec) return;
+      const parsed = parseGame(rec.pgn, rec.meta || {});
+      parsed.startPly = atPly;
+      reviewOrigin = 'practice';
+      openGame(parsed);
+    },
+  });
 }
 
 /** Fill the info card with players, time control and how the game ended. */
@@ -668,6 +705,51 @@ function showsReply(rec) {
   return Boolean(rec && rec.replySan && rec.replyLine[0] && (markFor(rec) !== null || rec.notes.length > 0));
 }
 
+const THREATS_KEY = 'chessReview.showThreats';
+/** Whether the board circles pieces that can be won right now. Remembered between visits. */
+let showThreats = (() => { try { return localStorage.getItem(THREATS_KEY) === '1'; } catch { return false; } })();
+
+/**
+ * Rings for pieces that can be captured at a profit in a position: red for the player's,
+ * green for the opponent's. Empty when the option is off.
+ * @param {string} fen
+ * @param {'w' | 'b' | null} colour The player's colour; White when unknown.
+ * @returns {{square: string, cls: string}[]}
+ */
+function threatRingsFor(fen, colour) {
+  const mine = colour || 'w';
+  const theirs = mine === 'w' ? 'b' : 'w';
+  return [
+    ...hangingSquares(fen, mine).map((square) => ({ square, cls: 'ring-mine' })),
+    ...hangingSquares(fen, theirs).map((square) => ({ square, cls: 'ring-theirs' })),
+  ];
+}
+
+/**
+ * Threat rings for the review board.
+ * @param {string} fen
+ * @returns {{square: string, cls: string}[]}
+ */
+function threatRings(fen) {
+  return showThreats ? threatRingsFor(fen, game.userColour) : [];
+}
+
+/** Turn the threatened-piece rings on or off, and remember the choice. */
+function toggleThreats() {
+  showThreats = !showThreats;
+  try { localStorage.setItem(THREATS_KEY, showThreats ? '1' : '0'); } catch { /* storage unavailable */ }
+  updateThreatButton();
+  if (game) renderBoard();
+}
+
+/** Show the threat button's on/off state. */
+function updateThreatButton() {
+  const btn = $('threatBtn');
+  btn.setAttribute('aria-pressed', String(showThreats));
+  btn.classList.toggle('ghost', !showThreats);
+  btn.textContent = showThreats ? 'ซ่อนหมากที่ถูกโจมตี' : 'แสดงหมากที่ถูกโจมตี';
+}
+
 /** Keyboard shortcut B: switch the better-move replay on or off. */
 function toggleBetter() {
   toggleLine('best');
@@ -689,6 +771,7 @@ function renderBoard(animate = null) {
           { from: last.from, to: last.to, colour: ARROW.played },
           { from: rec.bestUci.slice(0, 2), to: rec.bestUci.slice(2, 4), colour: ARROW.best },
         ],
+        rings: threatRings(rec.fenBefore),
       });
       return;
     }
@@ -701,7 +784,7 @@ function renderBoard(animate = null) {
     const arrows = next
       ? [{ from: next.slice(0, 2), to: next.slice(2, 4), colour: nextIsMover ? ARROW.best : ARROW.reply }]
       : [];
-    board.render(shown.fen, prev ? { from: prev.from, to: prev.to } : null, { arrows, animate });
+    board.render(shown.fen, prev ? { from: prev.from, to: prev.to } : null, { arrows, animate, rings: threatRings(shown.fen) });
     return;
   }
   const mark = markFor(rec);
@@ -709,7 +792,8 @@ function renderBoard(animate = null) {
   // For a flagged move, draw the opponent's best answer so the punishment is visible.
   const reply = showsReply(rec) ? rec.replyLine[0] : null;
   const arrows = reply ? [{ from: reply.slice(0, 2), to: reply.slice(2, 4), colour: ARROW.reply }] : [];
-  board.render(game.positions[ply], last ? { from: last.from, to: last.to } : null, { badge, arrows, animate });
+  board.render(game.positions[ply], last ? { from: last.from, to: last.to } : null,
+    { badge, arrows, animate, rings: threatRings(game.positions[ply]) });
 }
 
 /**
@@ -805,6 +889,7 @@ function showLoader() {
 /** Header "back" button: a game opened from the statistics page returns there. */
 function goBack() {
   if (game && reviewOrigin === 'stats') showStats();
+  else if (game && reviewOrigin === 'practice') openPractice();
   else showLoader();
 }
 
@@ -819,22 +904,15 @@ const statsMemo = new Map();
 /** Incremented on every visit to the statistics page so an older, slower run cannot draw over a newer one. */
 let statsRun = 0;
 
-/** Build and show the statistics page from every saved analysis the player took part in. */
-async function showStats() {
-  const run = ++statsRun;
-  cancelAnalysis();
-  game = null;
-  showView('stats');
-  for (const id of ['statsFocusCard', 'statsCatCard', 'statsMoreCard']) $(id).hidden = true;
-  $('statsTiles').replaceChildren();
-  setStatus('statsStatus', 'กำลังคำนวณ...');
-  await new Promise((resolve) => setTimeout(resolve, 0)); // let the message paint first
-
+/**
+ * Rebuild every saved analysis of a game the player took part in.
+ * Shared by the statistics page and practice mode.
+ * @param {(done: number, total: number) => void} onProgress Called before each game is rebuilt.
+ * @param {() => boolean} cancelled Checked between games; true abandons the work.
+ * @returns {Promise<{game: object, analysis: object, colour: 'w' | 'b'}[] | null>} null if cancelled.
+ */
+async function loadUserEntries(onProgress, cancelled) {
   const me = loadSavedUsername().toLowerCase();
-  if (!me) {
-    setStatus('statsStatus', 'ยังไม่รู้ว่าคุณคือผู้เล่นคนไหน กลับไปโหลดเกมด้วย username ก่อน', true);
-    return;
-  }
   // One analysis per game: if a game was analysed at two depths, keep the deeper one.
   statsSaved = new Map();
   for (const rec of await cacheAll()) {
@@ -852,10 +930,9 @@ async function showStats() {
     let built = statsMemo.get(memoKey);
     if (!built) {
       // Yield between games so the page stays responsive and the count is visible.
-      setStatus('statsStatus', `กำลังคำนวณ ${seen}/${statsSaved.size} เกม...`);
+      onProgress(seen, statsSaved.size);
       await new Promise((resolve) => setTimeout(resolve, 0));
-      // Stop if the user left the page, or left and came back (a newer run is now in charge).
-      if ($('statsView').hidden || run !== statsRun) return;
+      if (cancelled()) return null;
       let parsed;
       try { parsed = parseGame(rec.pgn, rec.meta || {}); } catch { continue; }
       if (rec.evals.length !== parsed.positions.length) continue;
@@ -868,7 +945,30 @@ async function showStats() {
     if (!colour) continue; // someone else's game
     entries.push({ ...built, colour });
   }
+  return entries;
+}
 
+/** Build and show the statistics page from every saved analysis the player took part in. */
+async function showStats() {
+  const run = ++statsRun;
+  cancelAnalysis();
+  game = null;
+  showView('stats');
+  for (const id of ['statsFocusCard', 'statsCatCard', 'statsMoreCard']) $(id).hidden = true;
+  $('statsTiles').replaceChildren();
+  setStatus('statsStatus', 'กำลังคำนวณ...');
+  await new Promise((resolve) => setTimeout(resolve, 0)); // let the message paint first
+
+  if (!loadSavedUsername()) {
+    setStatus('statsStatus', 'ยังไม่รู้ว่าคุณคือผู้เล่นคนไหน กลับไปโหลดเกมด้วย username ก่อน', true);
+    return;
+  }
+  const entries = await loadUserEntries(
+    (done, total) => setStatus('statsStatus', `กำลังคำนวณ ${done}/${total} เกม...`),
+    // Stop if the user left the page, or left and came back (a newer run is now in charge).
+    () => $('statsView').hidden || run !== statsRun,
+  );
+  if (!entries) return;
   if (entries.length === 0) {
     setStatus('statsStatus', 'ยังไม่มีเกมของคุณที่วิเคราะห์แล้ว กลับไปกด "วิเคราะห์ทุกเกมในรายการ" ก่อน', true);
     return;
@@ -1238,6 +1338,9 @@ $('pgnBtn').addEventListener('click', () => tryOpenPgn($('pgnInput').value, 'pgn
 $('backBtn').addEventListener('click', goBack);
 $('statsBtn').addEventListener('click', showStats);
 $('batchBtn').addEventListener('click', batchAnalyse);
+$('threatBtn').addEventListener('click', toggleThreats);
+$('practiceBtn').addEventListener('click', openPractice);
+updateThreatButton();
 
 $('firstBtn').addEventListener('click', () => goTo(0));
 $('prevBtn').addEventListener('click', () => goTo(ply - 1));
@@ -1269,6 +1372,7 @@ document.addEventListener('keydown', (e) => {
     End: () => goTo(game.moves.length),
     KeyF: flipBoard,
     KeyB: toggleBetter,
+    KeyH: toggleThreats,
   };
   // e.code names the physical key, so F and B still work while a Thai keyboard layout is active.
   const action = actions[e.key] || actions[e.code];
@@ -1281,7 +1385,7 @@ const narrowScreen = window.matchMedia('(max-width: 920px)');
 
 /** Move the explanation card to the right place for the current screen width. */
 function placeMoveCard() {
-  const card = document.querySelector('.move-card');
+  const card = document.querySelector('#reviewView .move-card');
   const nav = document.querySelector('.nav-block');
   if (narrowScreen.matches) {
     // Phone: buttons right under the board, then the explanation.
@@ -1289,7 +1393,7 @@ function placeMoveCard() {
     nav.after(card);
   } else {
     // Wide screen: the board gets the full height; explanation and buttons sit beside it.
-    document.querySelector('.side-col').prepend(card);
+    document.querySelector('#reviewView .side-col').prepend(card);
     card.after(nav);
     nav.after(document.querySelector('.moves-card'));
   }

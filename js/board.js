@@ -38,6 +38,12 @@ export class Board {
     this.fen = null;
     this.lastMove = null;
     this.extras = {};
+    /** Called with a square name when the board is clicked; null for a read-only board. */
+    this.onSquare = null;
+    el.addEventListener('click', (e) => {
+      const sq = e.target.closest('[data-square]');
+      if (sq && this.onSquare) this.onSquare(sq.dataset.square);
+    });
   }
 
   /**
@@ -55,8 +61,10 @@ export class Board {
    * @param {{from: string, to: string} | null} lastMove Squares to highlight, if any.
    * @param {{arrows?: {from: string, to: string, colour: string}[],
    *          badge?: {square: string, text: string, cls: string} | null,
-   *          animate?: {from: string, to: string} | null}} extras Overlays; `animate` slides the
-   *   piece now standing on `to` in from `from`.
+   *          animate?: {from: string, to: string} | null,
+   *          rings?: {square: string, cls: string}[], selected?: string | null,
+   *          dots?: string[]}} extras Overlays; `animate` slides the piece now standing on `to`
+   *   in from `from`; `rings` circle pieces; `selected` and `dots` show a picked piece and where it can go.
    */
   render(fen, lastMove = null, extras = {}) {
     this.fen = fen;
@@ -76,6 +84,10 @@ export class Board {
         sq.className = 'sq ' + (isDark ? 'dark' : 'light');
         sq.dataset.square = name;
         if (lastMove && (lastMove.from === name || lastMove.to === name)) sq.classList.add('hl');
+        if (extras.selected === name) sq.classList.add('selected');
+        if (extras.dots && extras.dots.includes(name)) sq.classList.add(pieces.has(name) ? 'capture-dot' : 'dot-target');
+        const ring = extras.rings && extras.rings.find((r) => r.square === name);
+        if (ring) sq.classList.add('ring', ring.cls);
 
         const piece = pieces.get(name);
         if (piece) {

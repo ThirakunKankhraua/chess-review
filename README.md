@@ -12,6 +12,9 @@ It runs entirely in the browser: no server, no account, no upload of your games.
   missed and allowed mates, and two-move tactics. When no rule applies it says so instead of guessing.
 - Shows an eval bar, an eval graph, per-game accuracy, and the engine's better move on the board.
 - Aggregates mistake categories across games to show which habit to fix first.
+- Practice mode turns your own Mistakes and Blunders into puzzles: click a move, and a fresh engine
+  check accepts it if it loses less than 5 points of win chance. Wrong tries are explained.
+- Optional rings show pieces that can be won right now (red: yours, green: the opponent's).
 
 ## Running it locally
 

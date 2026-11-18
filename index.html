@@ -10,7 +10,8 @@
 <header class="topbar">
   <span class="brand">Chess Review</span>
   <span class="row">
-    <button id="statsBtn" class="ghost">สถิติจุดอ่อน</button>
+    <button id="practiceBtn" class="ghost"><span class="long">ฝึกจากเกมตัวเอง</span><span class="short">ฝึก</span></button>
+    <button id="statsBtn" class="ghost"><span class="long">สถิติจุดอ่อน</span><span class="short">สถิติ</span></button>
     <button id="backBtn" class="ghost" hidden>กลับ</button>
   </span>
 </header>
@@ -89,6 +90,30 @@
     </div>
   </section>
 
+  <!-- View 4: practise the positions where you went wrong -->
+  <section id="practiceView" hidden>
+    <div class="board-col">
+      <div class="board-wrap">
+        <div id="practiceBoard" class="board" aria-label="กระดานโจทย์"></div>
+      </div>
+    </div>
+    <div class="side-col">
+      <div class="card">
+        <h2>ฝึกจากความผิดพลาดของคุณ</h2>
+        <p id="practiceStatus" class="status" role="status"></p>
+        <label class="practice-filter">กลุ่มโจทย์<select id="practiceFilter"></select></label>
+      </div>
+      <div class="card" id="practiceCard" hidden>
+        <div id="practiceTask" class="move-status"></div>
+        <div id="practiceMeta" class="practice-meta"></div>
+        <div id="practiceFeedback" class="practice-feedback move-detail" role="status"></div>
+        <div id="practiceTools" class="row practice-tools"></div>
+      </div>
+      <p class="note">ตาที่ถือว่าถูก คือตาที่ engine เลือก หรือตาที่ engine ตรวจแล้วว่าเสียโอกาสชนะน้อยกว่า 5 จุด
+        ความคืบหน้าเก็บไว้ในเบราว์เซอร์นี้เท่านั้น</p>
+    </div>
+  </section>
+
   <!-- View 2: step through a game -->
   <section id="reviewView" hidden>
     <div class="board-col">
@@ -118,6 +143,11 @@
       <div class="row mistake-nav">
         <button id="prevMistakeBtn" type="button" class="ghost" disabled>ข้อผิดพลาดก่อนหน้า</button>
         <button id="nextMistakeBtn" type="button" class="ghost" disabled>ข้อผิดพลาดถัดไป</button>
+      </div>
+      <div class="row threat-row">
+        <button id="threatBtn" type="button" class="ghost" aria-pressed="false" title="แสดงหมากที่ถูกโจมตี (H)">แสดงหมากที่ถูกโจมตี</button>
+        <span class="threat-legend"><span class="r">วงแดง</span> หมากของคุณที่อีกฝ่ายกินได้คุ้ม
+          <span class="g">วงเขียว</span> หมากอีกฝ่ายที่คุณกินได้คุ้ม</span>
       </div>
       </div>
       <div class="card move-card">

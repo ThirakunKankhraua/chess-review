@@ -141,7 +141,7 @@ h2.sub { margin-top: 16px; }
 .examples .where { color: var(--muted); font-size: 13px; }
 
 /* Review layout */
-#reviewView:not([hidden]) {
+#reviewView:not([hidden]), #practiceView:not([hidden]) {
   display: grid;
   /* Board height = screen height minus the top bar and the two player bars. */
   grid-template-columns: clamp(320px, calc(100vh - 140px), 860px) minmax(300px, 1fr);
@@ -309,7 +309,7 @@ h2.sub { margin-top: 16px; }
 /* Phone layout: board on top, moves below */
 @media (max-width: 920px) {
   main { padding: 12px 16px; }
-  #reviewView:not([hidden]) { grid-template-columns: minmax(0, 1fr); }
+  #reviewView:not([hidden]), #practiceView:not([hidden]) { grid-template-columns: minmax(0, 1fr); }
   .board-col { max-width: 680px; margin: 0 auto; }
   .move-list { max-height: 40vh; }
   .game-list button { grid-template-columns: 48px 1fr; }
@@ -352,3 +352,48 @@ h2.sub { margin-top: 16px; }
   border-radius: 6px; padding: 8px 10px; line-height: 1.45;
 }
 button.moment:hover { background: #36332e; }
+
+/* ---------- interactive board, threat rings ---------- */
+.sq.selected::before { content: ""; position: absolute; inset: 0; background: rgba(255, 236, 80, 0.55); }
+.sq.dot-target::after {
+  content: ""; position: absolute; z-index: 3; left: 36%; top: 36%; width: 28%; height: 28%;
+  border-radius: 50%; background: rgba(0, 0, 0, 0.28); pointer-events: none;
+}
+.sq.capture-dot::after {
+  content: ""; position: absolute; z-index: 3; inset: 4%; border-radius: 50%;
+  border: 5px solid rgba(0, 0, 0, 0.28); pointer-events: none;
+}
+.sq.ring::after {
+  content: ""; position: absolute; z-index: 3; inset: 3%; border-radius: 50%; pointer-events: none;
+}
+.sq.ring.ring-mine::after { box-shadow: inset 0 0 0 4px #e0473a, 0 0 8px rgba(224, 71, 58, 0.8); }
+.sq.ring.ring-theirs::after { box-shadow: inset 0 0 0 4px #5fbf3a, 0 0 8px rgba(95, 191, 58, 0.8); }
+.sq.ring.ring-hint::after { box-shadow: inset 0 0 0 4px #4aa3ff, 0 0 10px rgba(74, 163, 255, 0.9); }
+.board.interactive .sq { cursor: pointer; }
+.threat-row { margin-top: 6px; align-items: center; }
+.threat-row button { font-size: 13px; padding: 7px 10px; }
+.threat-legend { font-size: 12.5px; color: var(--muted); }
+.threat-legend .r { color: #ff7a6b; font-weight: 700; }
+.threat-legend .g { color: #8fd66a; font-weight: 700; }
+
+/* ---------- practice mode ---------- */
+.practice-feedback { margin-top: 10px; line-height: 1.6; }
+.practice-feedback .ok { color: #8fd66a; font-weight: 700; }
+.practice-feedback .bad { color: #ff7a6b; font-weight: 700; }
+.practice-tools { margin-top: 12px; }
+.practice-tools button { font-size: 13px; padding: 7px 10px; }
+.practice-meta { color: var(--muted); font-size: 13px; margin-top: 4px; }
+.practice-filter select {
+  margin-left: 6px; background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font: inherit;
+}
+
+/* Header: short button labels on phones so the bar stays on one line */
+.topbar .short { display: none; }
+@media (max-width: 520px) {
+  .topbar { padding: 8px 12px; }
+  .topbar .long { display: none; }
+  .topbar .short { display: inline; }
+  .topbar button { padding: 8px 10px; }
+  .brand { font-size: 15px; }
+}
