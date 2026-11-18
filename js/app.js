@@ -278,6 +278,7 @@ function openGame(parsed) {
   renderMoveList();
   $('evalBar').hidden = true;
   showView('review');
+  updateThreatButton(); // practice mode may have changed the shared setting
   goTo(0);
   runAnalysis(game);
 }
@@ -706,8 +707,11 @@ function showsReply(rec) {
 }
 
 const THREATS_KEY = 'chessReview.showThreats';
-/** Whether the board circles pieces that can be won right now. Remembered between visits. */
-let showThreats = (() => { try { return localStorage.getItem(THREATS_KEY) === '1'; } catch { return false; } })();
+/** Whether the board circles pieces that can be won right now. Practice mode shares this setting,
+ * so it is always read from storage rather than kept in a variable. */
+function threatsEnabled() {
+  try { return localStorage.getItem(THREATS_KEY) === '1'; } catch { return false; }
+}
 
 /**
  * Rings for pieces that can be captured at a profit in a position: red for the player's,
@@ -731,13 +735,13 @@ function threatRingsFor(fen, colour) {
  * @returns {{square: string, cls: string}[]}
  */
 function threatRings(fen) {
-  return showThreats ? threatRingsFor(fen, game.userColour) : [];
+  return threatsEnabled() ? threatRingsFor(fen, game.userColour) : [];
 }
 
 /** Turn the threatened-piece rings on or off, and remember the choice. */
 function toggleThreats() {
-  showThreats = !showThreats;
-  try { localStorage.setItem(THREATS_KEY, showThreats ? '1' : '0'); } catch { /* storage unavailable */ }
+  const on = !threatsEnabled();
+  try { localStorage.setItem(THREATS_KEY, on ? '1' : '0'); } catch { /* storage unavailable */ }
   updateThreatButton();
   if (game) renderBoard();
 }
@@ -745,9 +749,10 @@ function toggleThreats() {
 /** Show the threat button's on/off state. */
 function updateThreatButton() {
   const btn = $('threatBtn');
-  btn.setAttribute('aria-pressed', String(showThreats));
-  btn.classList.toggle('ghost', !showThreats);
-  btn.textContent = showThreats ? 'ซ่อนหมากที่ถูกโจมตี' : 'แสดงหมากที่ถูกโจมตี';
+  const on = threatsEnabled();
+  btn.setAttribute('aria-pressed', String(on));
+  btn.classList.toggle('ghost', !on);
+  btn.textContent = on ? 'ซ่อนหมากที่ถูกโจมตี' : 'แสดงหมากที่ถูกโจมตี';
 }
 
 /** Keyboard shortcut B: switch the better-move replay on or off. */

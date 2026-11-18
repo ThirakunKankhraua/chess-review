@@ -94,6 +94,18 @@ function winFor(ev, colour) {
   return colour === 'w' ? white : 100 - white;
 }
 
+/**
+ * Whether an evaluation is a forced mate (or a finished mate) in one side's favour.
+ * @param {{mate?: number, winner?: 'w' | 'b'}} ev White-POV evaluation.
+ * @param {'w' | 'b'} colour
+ * @returns {boolean}
+ */
+function isMateFor(ev, colour) {
+  if (typeof ev.mate !== 'number') return false;
+  if (ev.mate === 0) return ev.winner === colour;
+  return (ev.mate > 0) === (colour === 'w');
+}
+
 // ---------- building the puzzle list ----------
 
 /**
@@ -248,7 +260,11 @@ async function tryMove(move) {
 
   const winAfter = winFor(ev, p.colour);
   const drop = Math.max(0, p.winBefore - winAfter);
-  if (drop < LABEL_THRESHOLDS.inaccuracy) { solved({ winAfter }); return; }
+  // Win chance tops out near 100%, so when a forced mate was there, any move that keeps a big
+  // advantage would look almost lossless. Such puzzles are only solved by a move that keeps the mate.
+  const mateBefore = isMateFor(p.evalBefore, p.colour);
+  const keepsMate = after.isCheckmate() || isMateFor(ev, p.colour);
+  if (drop < LABEL_THRESHOLDS.inaccuracy && (!mateBefore || keepsMate)) { solved({ winAfter }); return; }
 
   // Explain the try with the review screen's rules, as if it had been played in the game.
   const rec = {
@@ -262,9 +278,12 @@ async function tryMove(move) {
   s.attempt.replyUci = (ev.pv || [])[0] || null;
   s.state = 'wrong';
   render();
+  const head = mateBefore && !keepsMate && drop < LABEL_THRESHOLDS.inaccuracy
+    ? `ยังไม่ใช่: ${move.san} ยังได้เปรียบอยู่ แต่ตำแหน่งนี้มี mate และตานี้ปล่อยให้ mate หลุดไป`
+    : `ยังไม่ใช่: ${move.san} ทำให้โอกาสชนะลดจาก ${Math.round(p.winBefore)}% เหลือ ` +
+      `${Math.round(winAfter)}% (${LABEL_TEXT[rec.label] || rec.label})`;
   const parts = [
-    el('div', 'bad', `ยังไม่ใช่: ${move.san} ทำให้โอกาสชนะลดจาก ${Math.round(p.winBefore)}% เหลือ ` +
-      `${Math.round(winAfter)}% (${LABEL_TEXT[rec.label] || rec.label})`),
+    el('div', 'bad', head),
     ...why.notes.map((n) => el('div', 'why', n)),
   ];
   if (why.outcome) parts.push(el('div', 'outcome', why.outcome));
