@@ -172,16 +172,18 @@ function describeThreat(raw, rec) {
   if (!what) return null;
   // Does the threat still work after the move that was played?
   let stillThere = false;
-  try {
-    const after = new Chess(rec.fenAfter);
-    const m = after.move({ from: t.uci.slice(0, 2), to: t.uci.slice(2, 4), promotion: t.uci[4] });
-    if (t.type === 'mate') stillThere = after.isCheckmate() || (m && after.inCheck());
-    else {
+  if (t.type === 'mate') {
+    // A mate threat survives only if the engine still sees a forced mate against the mover.
+    const ev = raw.played;
+    stillThere = typeof ev.mate === 'number' && ev.mate !== 0 && (ev.mate > 0) !== (rec.color === 'w');
+  } else {
+    try {
+      new Chess(rec.fenAfter).move({ from: t.uci.slice(0, 2), to: t.uci.slice(2, 4), promotion: t.uci[4] });
       const cap = evaluateCapture(rec.fenAfter, t.uci);
       stillThere = Boolean(cap && cap.captured && cap.gain >= 2);
+    } catch {
+      stillThere = false; // the threatening move is no longer legal
     }
-  } catch {
-    stillThere = false;
   }
   return { text: `ก่อนตานี้ ${them}ขู่ ${san} (${what})`, stillThere };
 }
@@ -225,6 +227,9 @@ export function describeDeep(raw, rec, profile, isPlayer) {
   }
 
   // Personal note: connect this mistake to the player's own record.
+  if (isPlayer && !profile && rec.tags.length) {
+    notes.push('เปิดหน้า "สถิติจุดอ่อน" หนึ่งครั้ง แล้วส่วนนี้จะบอกด้วยว่าความผิดพลาดแบบนี้เป็นจุดอ่อนอันดับเท่าไรของคุณ');
+  }
   if (isPlayer && profile && profile.tags) {
     const ranked = Object.entries(profile.tags).sort((a, b) => b[1].count - a[1].count);
     for (const tag of rec.tags) {

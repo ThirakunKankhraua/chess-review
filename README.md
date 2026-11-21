@@ -31,8 +31,9 @@ back to the Lite engine and says so.
 
 Measured 2026-11-21 on one 132-ply game (8-core PC): against a reference of the full engine at depth 18,
 the Lite engine at depth 14 disagreed on 10 Mistake/Blunder labels; the full engine at depth 14
-(0.3 s cap per position) disagreed on 1, taking 13 s instead of 7 s. One game only, so treat it as a sign,
-not a benchmark.
+(0.3 s cap per position) disagreed on 1, taking 13 s instead of 7 s. Multi-threaded search is not
+repeatable: two runs of the full-engine setting on that same game differed on 5 Mistake/Blunder labels
+(the Lite engine gives identical results every run). One game only, so treat these as signs, not a benchmark.
 
 Each move also has an "analyse this move in depth" button: three candidate moves at a deeper search,
 what each one does on the board, what the opponent was threatening before the move, and a link to the

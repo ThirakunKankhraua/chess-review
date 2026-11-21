@@ -698,8 +698,11 @@ async function analyseMoveDeep() {
         const line = document.getElementById('deepProgress');
         if (line && game === g && ply === at) line.textContent = text;
       });
-    await cachePut({ key: deepKey(g.id, at), kind: 'deep', raw, savedAt: Date.now() });
-    if (deep.gameId === g.id) deep.results.set(at, raw);
+    // Leaving the game stops the search early; such a shallow result is neither saved nor shown.
+    if (game === g) {
+      await cachePut({ key: deepKey(g.id, at), kind: 'deep', raw, savedAt: Date.now() });
+      deep.results.set(at, raw);
+    }
   } catch (err) {
     console.error(err);
     deep.error = 'วิเคราะห์ไม่สำเร็จ ลองใหม่อีกครั้ง';
@@ -749,7 +752,14 @@ function renderDeep(rec) {
   }
 
   const d = describeDeep(raw, rec, loadProfile(), game.userColour === rec.color);
-  wrap.appendChild(el('div', 'tip-head', `วิเคราะห์ละเอียด: ${ENGINE_PROFILE.label} depth ${d.depth}, 3 ตาที่ดีที่สุด`));
+  const head = el('div', 'row deep-head');
+  head.appendChild(el('div', 'tip-head', `วิเคราะห์ละเอียด: ${ENGINE_PROFILE.label} depth ${d.depth}, 3 ตาที่ดีที่สุด`));
+  const again = el('button', 'ghost', 'วิเคราะห์ใหม่');
+  again.type = 'button';
+  again.disabled = deep.running !== null;
+  again.addEventListener('click', () => { deep.results.delete(rec.ply); analyseMoveDeep(); });
+  head.appendChild(again);
+  wrap.appendChild(head);
   const verdict = el('div', 'deep-verdict');
   verdict.append(`ผลจากการวิเคราะห์ละเอียด: `, el('span', `chip lbl-${d.deepLabel}`, LABEL_TEXT[d.deepLabel]));
   if (d.deepLabel !== rec.label) {
@@ -1588,10 +1598,11 @@ function placeMoveCard() {
     $('playerBottom').after(nav);
     nav.after(card);
   } else {
-    // Wide screen: the board gets the full height; explanation and buttons sit beside it.
-    document.querySelector('#reviewView .side-col').prepend(card);
-    card.after(nav);
-    nav.after(document.querySelector('.moves-card'));
+    // Wide screen: the board gets the full height; buttons and explanation sit beside it.
+    // Buttons go first so a long explanation never pushes them off screen.
+    document.querySelector('#reviewView .side-col').prepend(nav);
+    nav.after(card);
+    card.after(document.querySelector('.moves-card'));
   }
 }
 narrowScreen.addEventListener('change', placeMoveCard);
