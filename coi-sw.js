@@ -40,13 +40,43 @@ function withIsolationHeaders(response) {
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
+/**
+ * Engine files are large (the full engine is 99 MB) and the browser's normal cache did not keep
+ * them: a reload took about 7 s to fetch the file again. Keep them in the Cache API instead.
+ * File names carry the engine version, so a cached copy never goes stale; a new engine version
+ * means a new file name and a new cache entry. Bump ENGINE_CACHE to drop old copies.
+ */
+const ENGINE_CACHE = 'chess-review-engine-v1';
+
+/**
+ * Serve an engine file from the cache, fetching and storing it the first time.
+ * @param {FetchEvent} event
+ * @returns {Promise<Response>}
+ */
+async function engineFile(event) {
+  const cache = await caches.open(ENGINE_CACHE);
+  const hit = await cache.match(event.request.url);
+  if (hit) return hit;
+  const response = await fetch(event.request);
+  if (response.ok) event.waitUntil(cache.put(event.request.url, response.clone()));
+  return response;
+}
+
+self.addEventListener('activate', (event) => {
+  // Remove engine caches from older versions of this worker.
+  event.waitUntil(caches.keys().then((keys) => Promise.all(
+    keys.filter((k) => k.startsWith('chess-review-engine-') && k !== ENGINE_CACHE).map((k) => caches.delete(k)),
+  )));
+});
+
 self.addEventListener('fetch', (event) => {
   const request = event.request;
   // A known Chrome quirk: this combination throws if passed to fetch().
   if (request.cache === 'only-if-cached' && request.mode !== 'same-origin') return;
+  const isEngine = request.method === 'GET' && new URL(request.url).pathname.includes('/vendor/stockfish/');
   event.respondWith((async () => {
     const isolate = await needsIsolation(event);
-    const response = await fetch(request);
+    const response = isEngine ? await engineFile(event) : await fetch(request);
     return isolate ? withIsolationHeaders(response) : response;
   })());
 });
