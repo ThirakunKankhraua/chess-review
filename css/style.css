@@ -397,3 +397,17 @@ button.moment:hover { background: #36332e; }
   .topbar button { padding: 8px 10px; }
   .brand { font-size: 15px; }
 }
+
+/* ---------- in-depth analysis of one move ---------- */
+.deep { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+.deep-btn { width: 100%; }
+.deep-verdict { margin: 4px 0 6px; }
+.cands { margin: 8px 0; display: grid; gap: 6px; }
+.cand { background: var(--panel-2); border-radius: 6px; padding: 8px 10px; }
+.cand.played { box-shadow: inset 3px 0 0 var(--accent); }
+.cand-head { display: flex; align-items: center; gap: 8px; }
+.cand-head strong { font-family: Consolas, monospace; font-size: 15px; }
+.cand-rank { color: var(--muted); width: 18px; }
+.cand-win { color: var(--muted); font-size: 13px; margin-right: auto; }
+.cand-head button { font-size: 12.5px; padding: 5px 9px; }
+.cand-ideas { margin-top: 4px; font-size: 14px; line-height: 1.5; color: var(--text); }

@@ -7,14 +7,50 @@ import { buildAnalysis, formatEval, LABEL_THRESHOLDS, LABELS } from './analysis.
 import { openingName } from './opening.js';
 import { hangingSquares } from './explain.js';
 import { startPractice, stopPractice } from './practice.js';
+import { describeDeep, runDeep } from './deep.js';
 import { cacheAll, cacheGet, cachePut } from './cache.js';
 import { CATEGORIES, PHASES, computeStats } from './stats.js';
 
 const USERNAME_KEY = 'chessReview.username';
-const ENGINE_PATH = 'vendor/stockfish/stockfish-19-lite-single.js';
-const ENGINE_TAG = 'sf19-lite';
-/** Search depth per position; phones get a shallower search to keep the wait reasonable. */
-const DEPTH = window.matchMedia('(pointer: coarse)').matches ? 12 : 14;
+/** The player's weakness counts, saved by the statistics page for personal notes elsewhere. */
+const PROFILE_KEY = 'chessReview.profile';
+/**
+ * Which engine this page runs. pc.html asks for the full multi-threaded engine; it only gets it
+ * when the page is cross-origin isolated (see js/coi.js). Everything else uses the light engine.
+ */
+const WANTS_FULL = document.documentElement.dataset.engine === 'full';
+const FULL = WANTS_FULL && window.crossOriginIsolated === true;
+const COARSE = window.matchMedia('(pointer: coarse)').matches;
+const ENGINE_PROFILE = FULL
+  ? {
+    path: 'vendor/stockfish/stockfish-19.js',
+    tag: 'sf19-full',
+    label: 'Stockfish 19 ตัวเต็ม (หลายคอร์)',
+    // Whole-game pass: depth 14 with a 0.3 s cap per position. Measured 2026-11-21 on a 132-ply game:
+    // 13 s, and only 1 Mistake/Blunder label differed from a depth-18 full-engine reference
+    // (the light engine at depth 14 differed on 10).
+    depth: 14,
+    maxMs: 300,
+    deepDepth: 22,      // "analyse this move in depth": 3 candidate lines
+    deepMs: 8000,
+    deepSeconds: '5-15',
+    // Leave one core free so the page stays responsive.
+    options: { threads: Math.max(1, Math.min(8, (navigator.hardwareConcurrency || 2) - 1)), hash: 256 },
+  }
+  : {
+    path: 'vendor/stockfish/stockfish-19-lite-single.js',
+    tag: 'sf19-lite',
+    label: 'Stockfish 19 Lite',
+    depth: COARSE ? 12 : 14, // phones get a shallower search to keep the wait reasonable
+    maxMs: 0,               // no cap: keeps results identical to analyses saved before
+    deepDepth: COARSE ? 16 : 18,
+    deepMs: 6000,
+    deepSeconds: COARSE ? '5-20' : '3-10',
+    options: {},
+  };
+const ENGINE_PATH = ENGINE_PROFILE.path;
+const ENGINE_TAG = ENGINE_PROFILE.tag;
+const DEPTH = ENGINE_PROFILE.depth;
 
 const DRAW_CODES = new Set([
   'agreed', 'repetition', 'stalemate', 'insufficient', '50move', 'timevsinsufficient',
@@ -182,7 +218,7 @@ async function evaluatePosition(fen) {
   if (pos.isCheckmate()) return { mate: 0, winner: turn === 'w' ? 'b' : 'w', best: null, pv: [] };
   if (pos.isGameOver()) return { cp: 0, best: null, pv: [] };
 
-  const res = await engine.analyse(fen, DEPTH);
+  const res = await engine.analyse(fen, DEPTH, ENGINE_PROFILE.maxMs);
   // UCI scores are for the side to move; flip them when Black is to move.
   const sign = turn === 'w' ? 1 : -1;
   const out = { best: res.best, pv: res.pv };
@@ -205,7 +241,7 @@ async function ensureEvals(g, token, onProgress) {
   // Entries saved without the PGN cannot be rebuilt for cross-game statistics, so redo them.
   if (saved && saved.pgn && saved.evals.length === g.positions.length) return saved.evals;
 
-  if (!engine) engine = new Engine(ENGINE_PATH);
+  if (!engine) engine = new Engine(ENGINE_PATH, ENGINE_PROFILE.options);
   await engine.newGame();
   const evals = [];
   for (let i = 0; i < g.positions.length; i++) {
@@ -269,6 +305,7 @@ function cancelAnalysis() {
 function openGame(parsed) {
   cancelAnalysis();
   game = parsed;
+  resetDeep();
   const me = loadSavedUsername().toLowerCase();
   if (me !== '' && (game.headers.Black || '').toLowerCase() === me) game.userColour = 'b';
   else if (me !== '' && (game.headers.White || '').toLowerCase() === me) game.userColour = 'w';
@@ -315,7 +352,7 @@ async function openPractice() {
     () => $('practiceView').hidden || run !== statsRun,
   );
   if (!entries) return;
-  if (!engine) engine = new Engine(ENGINE_PATH);
+  if (!engine) engine = new Engine(ENGINE_PATH, ENGINE_PROFILE.options);
   startPractice({
     entries,
     evaluate: evaluatePosition,
@@ -454,7 +491,8 @@ function renderSummary() {
     `ป้ายกำกับคิดจากโอกาสชนะที่ลดลง ตามช่วงที่ chess.com เผยแพร่: Excellent ไม่เกิน ` +
     `${LABEL_THRESHOLDS.excellent}, Inaccuracy ${LABEL_THRESHOLDS.inaccuracy}, ` +
     `Mistake ${LABEL_THRESHOLDS.mistake}, Blunder ${LABEL_THRESHOLDS.blunder} จุดเปอร์เซ็นต์ขึ้นไป ` +
-    'Miss คือพลาดโอกาสลงโทษตาที่อีกฝ่ายเพิ่งเดินพลาด';
+    'Miss คือพลาดโอกาสลงโทษตาที่อีกฝ่ายเพิ่งเดินพลาด' +
+    (WANTS_FULL && !FULL ? ' หมายเหตุ: เบราว์เซอร์นี้เปิด engine ตัวเต็มไม่ได้ จึงใช้ Lite แทน' : '');
   renderMoments();
   renderGraph();
 }
@@ -607,6 +645,137 @@ function renderMoveDetail() {
     card.append(el('div', 'tip-head', 'หลักทั่วไปช่วงเปิดเกม'), el('div', '', tip.text));
     box.appendChild(card);
   }
+  box.appendChild(renderDeep(rec));
+}
+
+// ---------- analysing one move in depth ----------
+
+/** In-depth results for the open game, by ply, and the move being analysed right now. */
+const deep = { gameId: null, results: new Map(), looked: new Set(), running: null, progress: '', error: null };
+
+/**
+ * Cache key for one move's in-depth result.
+ * @param {string} gameId
+ * @param {number} atPly
+ * @returns {string}
+ */
+function deepKey(gameId, atPly) {
+  return `deep|${gameId}|${atPly}|${ENGINE_TAG}|d${ENGINE_PROFILE.deepDepth}`;
+}
+
+/** Forget the previous game's in-depth results when another game opens. */
+function resetDeep() {
+  if (game && deep.gameId === game.id) return;
+  deep.gameId = game ? game.id : null;
+  deep.results = new Map();
+  deep.looked = new Set();
+  deep.error = null;
+}
+
+/**
+ * The player's weakness counts saved by the statistics page, for personal notes.
+ * @returns {object | null}
+ */
+function loadProfile() {
+  try { return JSON.parse(localStorage.getItem(PROFILE_KEY) || 'null'); } catch { return null; }
+}
+
+/** Run the in-depth analysis for the move on screen, save it, and show it. */
+async function analyseMoveDeep() {
+  if (!game || !game.analysis || ply === 0 || deep.running) return;
+  const g = game;
+  const at = ply;
+  const rec = g.analysis.records[at - 1];
+  deep.running = at;
+  deep.error = null;
+  deep.progress = FULL ? 'กำลังเตรียม engine ตัวเต็ม...' : 'กำลังเตรียม engine...';
+  renderMoveDetail();
+  try {
+    if (!engine) engine = new Engine(ENGINE_PATH, ENGINE_PROFILE.options);
+    const raw = await runDeep(engine, rec, { depth: ENGINE_PROFILE.deepDepth, maxMs: ENGINE_PROFILE.deepMs },
+      (text) => {
+        deep.progress = text;
+        const line = document.getElementById('deepProgress');
+        if (line && game === g && ply === at) line.textContent = text;
+      });
+    await cachePut({ key: deepKey(g.id, at), kind: 'deep', raw, savedAt: Date.now() });
+    if (deep.gameId === g.id) deep.results.set(at, raw);
+  } catch (err) {
+    console.error(err);
+    deep.error = 'วิเคราะห์ไม่สำเร็จ ลองใหม่อีกครั้ง';
+  } finally {
+    deep.running = null;
+    if (game === g && ply === at) renderMoveDetail();
+  }
+}
+
+/**
+ * The in-depth section of the move card: a button, progress, or the result.
+ * @param {object} rec Move record.
+ * @returns {HTMLElement}
+ */
+function renderDeep(rec) {
+  const wrap = el('div', 'deep');
+  const raw = deep.results.get(rec.ply);
+
+  // A result saved earlier is loaded once per move, then the card is redrawn.
+  if (!raw && !deep.looked.has(rec.ply)) {
+    deep.looked.add(rec.ply);
+    const g = game;
+    cacheGet(deepKey(g.id, rec.ply)).then((saved) => {
+      if (!saved || deep.gameId !== g.id) return;
+      deep.results.set(rec.ply, saved.raw);
+      if (game === g && ply === rec.ply) renderMoveDetail();
+    });
+  }
+
+  if (!raw) {
+    if (deep.running === rec.ply) {
+      wrap.appendChild(el('div', 'status', ''));
+      wrap.lastChild.id = 'deepProgress';
+      wrap.lastChild.textContent = deep.progress;
+      return wrap;
+    }
+    const busy = deep.running !== null;
+    const btn = el('button', 'deep-btn', busy
+      ? `กำลังวิเคราะห์ตาที่ ${Math.ceil(deep.running / 2)} อยู่...`
+      : `วิเคราะห์ตานี้ละเอียด (ประมาณ ${ENGINE_PROFILE.deepSeconds} วินาที)`);
+    btn.type = 'button';
+    btn.disabled = busy;
+    btn.addEventListener('click', analyseMoveDeep);
+    wrap.appendChild(btn);
+    if (deep.error) wrap.appendChild(el('div', 'status error', deep.error));
+    return wrap;
+  }
+
+  const d = describeDeep(raw, rec, loadProfile(), game.userColour === rec.color);
+  wrap.appendChild(el('div', 'tip-head', `วิเคราะห์ละเอียด: ${ENGINE_PROFILE.label} depth ${d.depth}, 3 ตาที่ดีที่สุด`));
+  const verdict = el('div', 'deep-verdict');
+  verdict.append(`ผลจากการวิเคราะห์ละเอียด: `, el('span', `chip lbl-${d.deepLabel}`, LABEL_TEXT[d.deepLabel]));
+  if (d.deepLabel !== rec.label) {
+    verdict.append(` (การวิเคราะห์ทั้งเกมให้ ${LABEL_TEXT[rec.label]} ผลนี้คิดลึกกว่าจึงเชื่อถือได้มากกว่า)`);
+  }
+  wrap.appendChild(verdict);
+  wrap.appendChild(el('div', '', `ตาที่เดิน ${d.played.san}: โอกาสชนะ ${Math.round(d.played.win)}% ` +
+    (d.played.rank ? `(อันดับ ${d.played.rank} ของ engine)` : '(ไม่อยู่ใน 3 อันดับแรกของ engine)')));
+
+  const table = el('div', 'cands');
+  for (const c of d.cands) {
+    const row = el('div', `cand${c.uci === rec.uci ? ' played' : ''}`);
+    const head = el('div', 'cand-head');
+    head.append(el('span', 'cand-rank', `${c.rank}.`), el('strong', '', c.san),
+      el('span', 'cand-win', `${Math.round(c.win)}% (${c.evalText})`));
+    const view = el('button', 'ghost', lineView && lineView.kind === 'cand' && lineView.index === c.rank - 1
+      ? 'ปิดแนวนี้' : 'ดูแนว');
+    view.type = 'button';
+    view.addEventListener('click', () => toggleLine('cand', c.rank - 1));
+    head.appendChild(view);
+    row.append(head, el('div', 'cand-ideas', c.ideas.join(' / ')));
+    table.appendChild(row);
+  }
+  wrap.appendChild(table);
+  for (const note of d.notes) wrap.appendChild(el('div', 'why', note));
+  return wrap;
 }
 
 /**
@@ -615,6 +784,11 @@ function renderMoveDetail() {
  * @returns {{fen: string, ucis: string[], firstIsMover: boolean}}
  */
 function currentLine(rec) {
+  if (lineView.kind === 'cand') {
+    const raw = deep.results.get(rec.ply);
+    const pv = raw && raw.cands[lineView.index] ? raw.cands[lineView.index].pv : [];
+    return { fen: rec.fenBefore, ucis: pv.slice(0, LINE_MAX), firstIsMover: true };
+  }
   return lineView.kind === 'best'
     ? { fen: rec.fenBefore, ucis: rec.bestLine.slice(0, LINE_MAX), firstIsMover: true }
     : { fen: rec.fenAfter, ucis: rec.replyLine.slice(0, LINE_MAX), firstIsMover: false };
@@ -649,7 +823,11 @@ function renderLineChips(rec) {
   const { fen, ucis } = currentLine(rec);
   const { moves } = playUcis(fen, ucis, ucis.length);
   const wrap = el('div', 'line-chips');
-  const title = lineView.kind === 'best' ? 'แนวที่ดีกว่า (engine)' : 'แนวที่อีกฝ่ายลงโทษ (engine)';
+  const title = {
+    best: 'แนวที่ดีกว่า (engine)',
+    reply: 'แนวที่อีกฝ่ายลงโทษ (engine)',
+    cand: `แนวของตาเลือกที่ ${(lineView.index || 0) + 1} (engine)`,
+  }[lineView.kind];
   wrap.appendChild(el('div', 'tip-head', `${title}: กดทีละตา หรือใช้ลูกศรซ้าย/ขวา กด Esc เพื่อกลับ`));
   const startBtn = el('button', lineView.step === 0 ? 'active' : '', 'เริ่ม');
   startBtn.type = 'button';
@@ -684,14 +862,17 @@ function setLineStep(step) {
 
 /**
  * Start or stop replaying one of the engine lines for the current move.
- * @param {'best' | 'reply'} kind
+ * @param {'best' | 'reply' | 'cand'} kind
+ * @param {number} index For 'cand': which candidate from the in-depth analysis.
  */
-function toggleLine(kind) {
+function toggleLine(kind, index = 0) {
   if (!game || !game.analysis || ply === 0) return;
   const rec = game.analysis.records[ply - 1];
   if (kind === 'best' && (rec.label === 'best' || !rec.bestUci)) return;
   if (kind === 'reply' && !showsReply(rec)) return;
-  lineView = lineView && lineView.kind === kind ? null : { kind, step: kind === 'reply' ? 1 : 0 };
+  if (kind === 'cand' && !deep.results.has(rec.ply)) return;
+  const same = lineView && lineView.kind === kind && (kind !== 'cand' || lineView.index === index);
+  lineView = same ? null : { kind, index, step: kind === 'reply' ? 1 : 0 };
   renderBoard();
   renderMoveDetail();
 }
@@ -918,12 +1099,13 @@ let statsRun = 0;
  */
 async function loadUserEntries(onProgress, cancelled) {
   const me = loadSavedUsername().toLowerCase();
-  // One analysis per game: if a game was analysed at two depths, keep the deeper one.
   statsSaved = new Map();
   for (const rec of await cacheAll()) {
     if (!rec.pgn) continue;
     const kept = statsSaved.get(rec.gameId);
-    if (!kept || kept.depth < rec.depth) statsSaved.set(rec.gameId, rec);
+    // One analysis per game: prefer this page's engine, then the deeper search.
+    const rank = (r) => (r.engine === ENGINE_TAG ? 1000 : 0) + r.depth;
+    if (!kept || rank(kept) < rank(rec)) statsSaved.set(rec.gameId, rec);
   }
 
   const entries = [];
@@ -1019,6 +1201,14 @@ function renderStats(stats) {
     .map((c) => ({ ...c, ...stats.categories.get(c.tag) }))
     .filter((c) => c.count > 0)
     .sort((a, b) => b.count - a.count);
+  // Remember the counts so the in-depth analysis can relate a mistake to the player's record.
+  try {
+    localStorage.setItem(PROFILE_KEY, JSON.stringify({
+      games: stats.games,
+      savedAt: Date.now(),
+      tags: Object.fromEntries(rows.map((r) => [r.tag, { count: r.count, name: r.name }])),
+    }));
+  } catch { /* storage unavailable */ }
   const cats = $('statsCats');
   cats.replaceChildren();
   const max = rows.length ? rows[0].count : 1;
@@ -1226,7 +1416,8 @@ const listing = {
  * @param {Error} err
  */
 function showLoadError(err) {
-  console.error(err);
+  // Only analyses made by this page's engine count: the computer page re-analyses lite results.
+  listing.analysed = new Set(saved.filter((r) => r.pgn && r.engine === ENGINE_TAG).map((r) => r.gameId));
   const offline = err instanceof TypeError;
   setStatus('loadStatus', offline ? 'เชื่อมต่อ chess.com ไม่ได้ ตรวจอินเทอร์เน็ตแล้วลองใหม่' : err.message, true);
 }
@@ -1372,7 +1563,7 @@ document.addEventListener('keydown', (e) => {
   const actions = {
     ArrowLeft: () => (inLine ? setLineStep(lineView.step - 1) : goTo(ply - 1)),
     ArrowRight: () => (inLine ? setLineStep(lineView.step + 1) : goTo(ply + 1)),
-    Escape: () => { if (inLine) toggleLine(lineView.kind); },
+    Escape: () => { if (inLine) toggleLine(lineView.kind, lineView.index); },
     Home: () => goTo(0),
     End: () => goTo(game.moves.length),
     KeyF: flipBoard,

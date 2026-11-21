@@ -16,6 +16,28 @@ It runs entirely in the browser: no server, no account, no upload of your games.
   check accepts it if it loses less than 5 points of win chance. Wrong tries are explained.
 - Optional rings show pieces that can be won right now (red: yours, green: the opponent's).
 
+## Two pages, two engines
+
+| Page | Engine | Used for |
+|---|---|---|
+| `index.html` | Stockfish 19 Lite, single thread (1.8 MB) | phones, and any browser |
+| `pc.html` | Stockfish 19 full network, multi-threaded (99 MB) | computers |
+
+Both pages are the same app. `pc.html` is generated from `index.html` by
+`python tools/make_pc_page.py`; run it after changing `index.html`. Multi-threading needs a
+cross-origin isolated page, which GitHub Pages cannot provide with headers, so `coi-sw.js` (a small
+service worker) adds them for `pc.html` and the engine files only. If isolation fails, `pc.html` falls
+back to the Lite engine and says so.
+
+Measured 2026-11-21 on one 132-ply game (8-core PC): against a reference of the full engine at depth 18,
+the Lite engine at depth 14 disagreed on 10 Mistake/Blunder labels; the full engine at depth 14
+(0.3 s cap per position) disagreed on 1, taking 13 s instead of 7 s. One game only, so treat it as a sign,
+not a benchmark.
+
+Each move also has an "analyse this move in depth" button: three candidate moves at a deeper search,
+what each one does on the board, what the opponent was threatening before the move, and a link to the
+player's own weakness counts from the statistics page.
+
 ## Running it locally
 
 ES modules and Web Workers do not load from `file://`, so serve the folder over HTTP:
